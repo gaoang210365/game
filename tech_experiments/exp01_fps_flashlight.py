@@ -19,6 +19,8 @@
 from panda3d.core import loadPrcFileData
 
 loadPrcFileData("", "window-title Echo Ward - Tech Exp 01")
+loadPrcFileData("", "win-size 1280 720")
+loadPrcFileData("", "undecorated false")
 loadPrcFileData("", "sync-video true")
 loadPrcFileData("", "show-frame-rate-meter true")
 
@@ -166,11 +168,13 @@ class Experiment01(ShowBase):
         self.camLens.setFov(75)
         self.camLens.setNear(0.1)
 
-        # 仅在真实窗口下设置光标与鼠标模式（离屏缓冲无此方法）
+        # 仅在真实窗口下设置光标、鼠标模式并主动抢占前台焦点
+        # （从终端启动时，焦点常留在终端，导致按键被终端接收）
         if hasattr(self.win, "requestProperties"):
             props = WindowProperties()
             props.setCursorHidden(True)
             props.setMouseMode(WindowProperties.M_confined)
+            props.setForeground(True)
             self.win.requestProperties(props)
         self._center_mouse()
 
@@ -217,6 +221,7 @@ class Experiment01(ShowBase):
         self.hud.setText(
             "Echo Ward - Tech Exp 01\n"
             "WASD move | Shift run | F flashlight | Esc quit\n"
+            "若无法移动：先用鼠标点一下本窗口获取焦点\n"
             f"Flashlight: {fl}"
         )
 
