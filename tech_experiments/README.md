@@ -26,11 +26,22 @@ D:\Users\21036\PycharmProjects\PythonProject\game_env\Scripts\python.exe tech_ex
 验证 Panda3D 3D 定位音频，支撑"声音先于视觉"的恐怖设计。红色方块是来回移动的音源，玩家移动/转向时应能通过音量和左右声道判断其方位与远近。
 
 ### 依赖音效
-运行前需生成测试音效（已随仓库提供 `assets/sounds/test_beacon.wav`，如需重新生成）：
+运行前需生成测试音效（已随仓库提供，如需重新生成）：
 
 ```powershell
 game_env\Scripts\python.exe tech_experiments\make_test_sound.py
 ```
+
+生成两个文件：
+- `test_beacon.wav` —— 单声道、可 3D 定位的移动音源（拍频低音 + 不规则金属撞击 + 游移高频，值夜护士感）
+- `horror_ambience.wav` —— 立体声恐怖背景氛围（深低频 sub + 不谐和音簇 + 远处金属涌动）
+
+### 混音比例
+在 `exp02_audio_3d.py` 顶部可调：
+- `BEACON_VOLUME = 1.0` —— 3D 定位音源，再随距离衰减
+- `AMBIENCE_VOLUME = 0.38` —— 2D 背景，压低铺底
+
+比例原则：背景集中在低频且音量压低，避免掩盖移动音源的中高频方位线索（"声音先于视觉"）。
 
 ### 已验证（离屏自动测试）
 - 3D 音频管理器初始化成功

@@ -39,12 +39,19 @@ import math
 
 globalClock = ClockObject.getGlobalClock()
 
-_SOUND_OS_PATH = os.path.join(
+_SOUNDS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "assets", "sounds", "test_beacon.wav",
+    "assets", "sounds",
 )
+_BEACON_OS_PATH = os.path.join(_SOUNDS_DIR, "test_beacon.wav")
+_AMBIENCE_OS_PATH = os.path.join(_SOUNDS_DIR, "horror_ambience.wav")
 # Panda3D 需要 Unix 风格路径（面板内部路径），用 Filename 转换
-SOUND_PATH = Filename.fromOsSpecific(_SOUND_OS_PATH).getFullpath()
+SOUND_PATH = Filename.fromOsSpecific(_BEACON_OS_PATH).getFullpath()
+AMBIENCE_PATH = Filename.fromOsSpecific(_AMBIENCE_OS_PATH).getFullpath()
+
+# 混音比例（配合"声音先于视觉"：定位音源保持清晰，背景压低铺底）
+BEACON_VOLUME = 1.0     # 3D 定位音源（会再随距离衰减）
+AMBIENCE_VOLUME = 0.38  # 2D 背景氛围，压低以免掩盖方位线索
 
 
 class Experiment02(ShowBase):
@@ -127,20 +134,32 @@ class Experiment02(ShowBase):
             print("disable IME failed (non-fatal):", e)
 
     def _setup_audio(self):
-        """3D 音频管理器：监听者绑相机，音源绑发声物体。"""
+        """3D 定位音源（怪物）+ 2D 背景恐怖氛围，按比例混音。"""
+        self.beacon = None
+        self.ambience = None
+
+        # 3D 定位音源：监听者绑相机，音源绑发声物体
         self.audio3d = Audio3DManager(self.sfxManagerList[0], self.camera)
-        # 距离系数与衰减：值越大，衰减越明显
         self.audio3d.setDistanceFactor(1.0)
         self.audio3d.setDropOffFactor(1.0)
-        if not os.path.exists(_SOUND_OS_PATH):
-            print("WARNING: sound file missing:", _SOUND_OS_PATH)
-            self.beacon = None
-            return
-        self.beacon = self.audio3d.loadSfx(SOUND_PATH)
-        self.audio3d.attachSoundToObject(self.beacon, self.source)
-        self.audio3d.attachListener(self.camera)
-        self.beacon.setLoop(True)
-        self.beacon.play()
+        if os.path.exists(_BEACON_OS_PATH):
+            self.beacon = self.audio3d.loadSfx(SOUND_PATH)
+            self.audio3d.attachSoundToObject(self.beacon, self.source)
+            self.audio3d.attachListener(self.camera)
+            self.beacon.setLoop(True)
+            self.beacon.setVolume(BEACON_VOLUME)
+            self.beacon.play()
+        else:
+            print("WARNING: beacon missing:", _BEACON_OS_PATH)
+
+        # 2D 背景氛围：不定位，直接用 sfx 管理器播放，音量压低铺底
+        if os.path.exists(_AMBIENCE_OS_PATH):
+            self.ambience = self.loader.loadSfx(AMBIENCE_PATH)
+            self.ambience.setLoop(True)
+            self.ambience.setVolume(AMBIENCE_VOLUME)
+            self.ambience.play()
+        else:
+            print("WARNING: ambience missing:", _AMBIENCE_OS_PATH)
 
     def _capture_mouse(self):
         if hasattr(self.win, "requestProperties"):
