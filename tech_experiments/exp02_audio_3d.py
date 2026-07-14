@@ -51,7 +51,7 @@ AMBIENCE_PATH = Filename.fromOsSpecific(_AMBIENCE_OS_PATH).getFullpath()
 
 # 混音比例（配合"声音先于视觉"：定位音源保持清晰，背景压低铺底）
 BEACON_VOLUME = 1.0     # 3D 定位音源（会再随距离衰减）
-AMBIENCE_VOLUME = 0.38  # 2D 背景氛围，压低以免掩盖方位线索
+AMBIENCE_VOLUME = 0.65  # 2D 背景氛围（调大：更有压迫感，但仍低于定位音源）
 
 
 class Experiment02(ShowBase):
