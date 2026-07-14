@@ -15,10 +15,38 @@ D:\Users\21036\PycharmProjects\PythonProject\game_env\Scripts\python.exe tech_ex
 | 编号 | 文件 | 验证内容 | 状态 |
 |---|---|---|---|
 | exp01 | exp01_fps_flashlight.py | 第一人称控制 + 碰撞 + 灯光 + 手电筒 | 已实现，待真机窗口确认 |
-| exp02 | （计划）exp02_audio_3d.py | 3D 音源与距离衰减 | 计划中 |
+| exp02 | exp02_audio_3d.py | 3D 音源与距离衰减 | 已实现，待真机听感确认 |
 | exp03 | （计划）exp03_save_load.py | 存档读写原型 | 计划中 |
 | exp04 | （计划）exp04_ai_state.py | AI 状态机与路径移动 | 计划中 |
 | exp05 | （计划）exp05_packaging | Windows 打包验证 | 计划中 |
+
+## exp02 说明
+
+### 目标
+验证 Panda3D 3D 定位音频，支撑"声音先于视觉"的恐怖设计。红色方块是来回移动的音源，玩家移动/转向时应能通过音量和左右声道判断其方位与远近。
+
+### 依赖音效
+运行前需生成测试音效（已随仓库提供 `assets/sounds/test_beacon.wav`，如需重新生成）：
+
+```powershell
+game_env\Scripts\python.exe tech_experiments\make_test_sound.py
+```
+
+### 已验证（离屏自动测试）
+- 3D 音频管理器初始化成功
+- 测试音效正确加载（Unix 风格路径）
+- 音源移动与距离计算正常
+- 中文 HUD 字体加载成功
+
+### 待人工确认（需真实窗口 + 音箱/耳机）
+- 音量随距离衰减是否明显
+- 左右声道能否反映音源方位
+- 戴耳机时的方位判断是否可靠
+
+### 技术要点
+- 音频文件路径需用 `Filename.fromOsSpecific()` 转 Unix 风格，否则 Panda3D 打不开。
+- 3D 定位音源需单声道 WAV。
+- 中文 HUD 需显式加载系统中文字体（msyh.ttc / simhei.ttf）。
 
 ## exp01 说明
 

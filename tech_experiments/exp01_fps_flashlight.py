@@ -30,7 +30,7 @@ from panda3d.core import (
     CardMaker, Vec3, Vec4, Point3, NodePath, WindowProperties,
     CollisionTraverser, CollisionHandlerPusher, CollisionNode,
     CollisionSphere, CollisionBox, BitMask32, TextNode,
-    ClockObject, KeyboardButton,
+    ClockObject, KeyboardButton, Filename,
 )
 from direct.gui.OnscreenText import OnscreenText
 import sys
@@ -260,8 +260,24 @@ class Experiment01(ShowBase):
             self.render.clearLight(self.flashlight_np)
         self._refresh_hud()
 
+    def _load_cn_font(self):
+        """加载系统中文字体，失败则回退默认字体。"""
+        import os
+        for os_path in (r"C:\Windows\Fonts\msyh.ttc",
+                        r"C:\Windows\Fonts\simhei.ttf"):
+            if os.path.exists(os_path):
+                try:
+                    panda_path = Filename.fromOsSpecific(os_path).getFullpath()
+                    font = self.loader.loadFont(panda_path)
+                    if font is not None and font.isValid():
+                        return font
+                except Exception:
+                    pass
+        return None
+
     def _setup_hud(self):
-        self.hud = OnscreenText(
+        self.cn_font = self._load_cn_font()
+        kwargs = dict(
             text="",
             pos=(-1.28, 0.90),
             scale=0.05,
@@ -269,6 +285,9 @@ class Experiment01(ShowBase):
             align=TextNode.ALeft,
             mayChange=True,
         )
+        if self.cn_font is not None:
+            kwargs["font"] = self.cn_font
+        self.hud = OnscreenText(**kwargs)
         self._refresh_hud()
 
     def _refresh_hud(self):
