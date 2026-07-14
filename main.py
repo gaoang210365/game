@@ -33,6 +33,8 @@ ENTRIES = [
      "tech_experiments/exp03_save_load.py", "技术验证"),
     ("audio", "重新生成全部音频资源（音乐/环境/音效）",
      "assets_gen/make_audio.py", "工具"),
+    ("textures", "重新生成全部贴图资源（地砖/墙面/门/金属）",
+     "assets_gen/make_textures.py", "工具"),
 ]
 
 

@@ -30,17 +30,22 @@ loadPrcFileData("", "window-title Echo Ward - 回声病房")
 loadPrcFileData("", "win-size 1280 720")
 loadPrcFileData("", "audio-library-name p3openal_audio")
 loadPrcFileData("", "show-frame-rate-meter true")
+loadPrcFileData("", "framebuffer-multisample 1")
+loadPrcFileData("", "multisamples 4")
+loadPrcFileData("", "textures-power-2 none")
 
 from direct.showbase.ShowBase import ShowBase
 from direct.showbase.Audio3DManager import Audio3DManager
 from panda3d.core import (
-    AmbientLight, DirectionalLight, Spotlight, PerspectiveLens,
+    AmbientLight, DirectionalLight, Spotlight, PointLight, PerspectiveLens,
     CardMaker, Vec3, Vec4, Point3, NodePath, WindowProperties,
     CollisionTraverser, CollisionHandlerPusher, CollisionNode,
     CollisionSphere, CollisionBox, BitMask32, TextNode,
-    ClockObject, KeyboardButton, Filename,
+    ClockObject, KeyboardButton, Filename, Fog, Texture,
+    TextureStage, SamplerState,
 )
 from direct.gui.OnscreenText import OnscreenText
+from direct.gui.OnscreenImage import OnscreenImage
 import sys
 import os
 import json
@@ -52,6 +57,7 @@ globalClock = ClockObject.getGlobalClock()
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SOUNDS_DIR = os.path.join(ROOT, "assets", "sounds")
 MUSIC_DIR = os.path.join(ROOT, "assets", "music")
+TEX_DIR = os.path.join(ROOT, "assets", "textures")
 SAVE_DIR = os.path.join(ROOT, "saves")
 SAVE_FILE = os.path.join(SAVE_DIR, "autosave.json")
 SAVE_VERSION = 2
@@ -66,6 +72,10 @@ def _sfx_path(name):
 
 def _music_path(name):
     return Filename.fromOsSpecific(os.path.join(MUSIC_DIR, name)).getFullpath()
+
+
+def _tex_path(name):
+    return Filename.fromOsSpecific(os.path.join(TEX_DIR, name)).getFullpath()
 
 
 class SaveManager:
@@ -255,21 +265,52 @@ class EchoWardGame(ShowBase):
 
     # ---------- 场景 ----------
 
+    def _load_tex(self, name, tiling=1.0):
+        """加载贴图，设为重复采样；缺失返回 None。"""
+        p = os.path.join(TEX_DIR, name)
+        if not os.path.exists(p):
+            return None
+        tex = self.loader.loadTexture(_tex_path(name))
+        if tex:
+            tex.setWrapU(Texture.WMRepeat)
+            tex.setWrapV(Texture.WMRepeat)
+            tex.setMinfilter(SamplerState.FTLinearMipmapLinear)
+            tex.setAnisotropicDegree(4)
+        return tex
+
     def _build_scene(self):
         self.level = NodePath("level")
         self.level.reparentTo(self.render)
 
-        # 地板 + 天花板
+        # 贴图
+        self.tex_floor = self._load_tex("floor_tile.png")
+        self.tex_wall = self._load_tex("wall.png")
+        self.tex_ceiling = self._load_tex("ceiling.png")
+        self.tex_door = self._load_tex("door.png")
+        self.tex_metal = self._load_tex("metal.png")
+
+        # 地板（贴地砖，按尺寸平铺）
         cm = CardMaker("floor")
         cm.setFrame(-6, 6, -2, 46)
+        cm.setUvRange((0, 0), (6, 24))
         floor = self.render.attachNewNode(cm.generate())
         floor.setP(-90)
-        floor.setColor(0.16, 0.17, 0.18, 1)
+        if self.tex_floor:
+            floor.setTexture(self.tex_floor)
+        else:
+            floor.setColor(0.16, 0.17, 0.18, 1)
         floor.reparentTo(self.level)
-        ceil = self.render.attachNewNode(cm.generate())
+        # 天花板
+        cmc = CardMaker("ceil")
+        cmc.setFrame(-6, 6, -2, 46)
+        cmc.setUvRange((0, 0), (6, 24))
+        ceil = self.render.attachNewNode(cmc.generate())
         ceil.setP(90)
         ceil.setZ(3.0)
-        ceil.setColor(0.08, 0.08, 0.10, 1)
+        if self.tex_ceiling:
+            ceil.setTexture(self.tex_ceiling)
+        else:
+            ceil.setColor(0.08, 0.08, 0.10, 1)
         ceil.reparentTo(self.level)
 
         # 走廊墙体 + 病房隔断（灰盒）：(中心, 尺寸)
@@ -290,7 +331,12 @@ class EchoWardGame(ShowBase):
             w = self.loader.loadModel("models/box")
             w.setScale(scale)
             w.setPos(pos - Point3(scale.x * 0.5, scale.y * 0.5, 0))
-            w.setColor(0.22, 0.2, 0.2, 1)
+            if self.tex_wall:
+                w.setTexture(self.tex_wall)
+                w.setTexScale(TextureStage.getDefault(),
+                              max(1, scale.x), max(1, scale.z))
+            else:
+                w.setColor(0.22, 0.2, 0.2, 1)
             w.reparentTo(self.level)
             self.walls.append((pos, scale))
 
@@ -324,8 +370,15 @@ class EchoWardGame(ShowBase):
         self.exit_door = self.loader.loadModel("models/box")
         self.exit_door.setScale(3, 0.4, 2.6)
         self.exit_door.setPos(self.exit_pos - Point3(1.5, 0.2, 0))
-        self.exit_door.setColor(0.5, 0.15, 0.15, 1)
+        if self.tex_door:
+            self.exit_door.setTexture(self.tex_door)
+        self.exit_door.setColorScale(1.2, 0.5, 0.5, 1)
         self.exit_door.reparentTo(self.level)
+        # 门上的绿色出口灯（集齐证据后点亮）
+        self.exit_light = PointLight("exit_light")
+        self.exit_light.setColor(Vec4(0.1, 0.5, 0.15, 1))
+        self.exit_light_np = self.render.attachNewNode(self.exit_light)
+        self.exit_light_np.setPos(0, 41, 2.5)
 
     # ---------- 碰撞 ----------
 
@@ -355,23 +408,55 @@ class EchoWardGame(ShowBase):
 
     def _setup_lighting(self):
         self.render.setShaderAuto()
+
+        # 提高环境光：昏暗但可辨认路径（不再纯黑）
         amb = AmbientLight("amb")
-        amb.setColor(Vec4(0.06, 0.07, 0.09, 1))
+        amb.setColor(Vec4(0.28, 0.30, 0.36, 1))
         self.render.setLight(self.render.attachNewNode(amb))
+
+        # 冷月光方向光，给墙面一点立体感
         dl = DirectionalLight("moon")
-        dl.setColor(Vec4(0.08, 0.09, 0.13, 1))
+        dl.setColor(Vec4(0.22, 0.24, 0.32, 1))
         np_dl = self.render.attachNewNode(dl)
         np_dl.setHpr(30, -60, 0)
         self.render.setLight(np_dl)
 
+        # 沿走廊的日光灯（点光源），带闪烁
+        self.fluorescents = []
+        for y in (6, 14, 22, 30, 38):
+            pl = PointLight(f"fluoro_{y}")
+            pl.setColor(Vec4(0.55, 0.58, 0.60, 1))
+            pl.setAttenuation(Vec3(1.0, 0.02, 0.010))
+            np_pl = self.render.attachNewNode(pl)
+            np_pl.setPos(0, y, 2.8)
+            self.render.setLight(np_pl)
+            # 灯管本体（自发光小方块）
+            tube = self.loader.loadModel("models/box")
+            tube.setScale(1.4, 0.25, 0.08)
+            tube.setPos(-0.7, y, 2.92)
+            tube.setColor(0.9, 0.95, 1.0, 1)
+            tube.setColorScale(1.8, 1.9, 2.0, 1)
+            tube.setLightOff()
+            tube.reparentTo(self.level)
+            self.fluorescents.append({"light": pl, "tube": tube,
+                                      "base": 0.58, "phase": y * 1.3})
+
+        # 体积雾：营造纵深与压迫感，同时柔化远处
+        fog = Fog("hospital_fog")
+        fog.setColor(0.05, 0.06, 0.08)
+        fog.setExpDensity(0.035)
+        self.render.setFog(fog)
+        self.fog = fog
+
     def _setup_flashlight(self):
         spot = Spotlight("flashlight")
         lens = PerspectiveLens()
-        lens.setFov(42)
+        lens.setFov(50)
         spot.setLens(lens)
-        spot.setColor(Vec4(1.1, 1.05, 0.95, 1))
-        spot.setAttenuation(Vec3(1.0, 0.0, 0.008))
+        spot.setColor(Vec4(1.6, 1.5, 1.35, 1))
+        spot.setAttenuation(Vec3(1.0, 0.0, 0.004))
         self.flashlight_np = self.camera.attachNewNode(spot)
+        self.flashlight_np.setPos(0.2, 0, -0.1)
         self.render.setLight(self.flashlight_np)
 
     def _setup_camera(self):
@@ -379,8 +464,21 @@ class EchoWardGame(ShowBase):
         self.camera.setPos(0, 0, 0)
         self.camLens.setFov(75)
         self.camLens.setNear(0.1)
+        self._last_mouse = None
         self._disable_ime()
+        # 抢占前台焦点，并在启动后自动进入视角控制（不再依赖点击）
+        if hasattr(self.win, "requestProperties"):
+            fg = WindowProperties()
+            fg.setForeground(True)
+            self.win.requestProperties(fg)
         self._release_mouse()
+        # 延迟一帧再捕获，确保窗口已就绪
+        self.taskMgr.doMethodLater(0.3, self._auto_capture, "auto_capture")
+
+    def _auto_capture(self, task):
+        if not self.mouse_captured and not self.game_over:
+            self._capture_mouse()
+        return task.done
 
     def _disable_ime(self):
         if sys.platform != "win32":
@@ -401,11 +499,21 @@ class EchoWardGame(ShowBase):
     # ---------- 护士 ----------
 
     def _setup_nurse(self):
-        self.nurse_node = self.loader.loadModel("models/box")
-        self.nurse_node.setScale(0.5, 0.5, 1.7)
-        self.nurse_node.setColor(0.75, 0.75, 0.8, 1)
-        self.nurse_node.setPos(0, 40, 0.9)
+        # 用一个纵向盒作躯干 + 顶部小盒作头，苍白护士感
+        self.nurse_node = NodePath("nurse")
         self.nurse_node.reparentTo(self.render)
+        self.nurse_node.setPos(0, 40, 0.9)
+        body = self.loader.loadModel("models/box")
+        body.setScale(0.5, 0.5, 1.4)
+        body.setPos(-0.25, -0.25, -0.9)
+        body.setColor(0.82, 0.83, 0.86, 1)
+        body.reparentTo(self.nurse_node)
+        head = self.loader.loadModel("models/box")
+        head.setScale(0.32, 0.32, 0.32)
+        head.setPos(-0.16, -0.16, 0.55)
+        head.setColor(0.9, 0.88, 0.85, 1)
+        head.setColorScale(1.3, 1.3, 1.3, 1)
+        head.reparentTo(self.nurse_node)
         waypoints = [(-3, 10), (3, 16), (-3, 26), (3, 32), (0, 38)]
         self.nurse = NurseAI(self.nurse_node, waypoints)
 
@@ -466,13 +574,16 @@ class EchoWardGame(ShowBase):
     # ---------- 鼠标 / 输入 ----------
 
     def _capture_mouse(self):
+        """进入视角控制：用 M_relative（相对模式）——系统自动隐藏并锁定光标，
+        每帧从 pointer 读到的是相对位移，无需手动回中，兼容性最好。"""
         if hasattr(self.win, "requestProperties"):
             props = WindowProperties()
             props.setCursorHidden(True)
-            props.setMouseMode(WindowProperties.M_confined)
+            props.setMouseMode(WindowProperties.M_relative)
+            props.setForeground(True)
             self.win.requestProperties(props)
         self.mouse_captured = True
-        self._center_mouse()
+        self._last_mouse = None
 
     def _release_mouse(self):
         if hasattr(self.win, "requestProperties"):
@@ -635,7 +746,35 @@ class EchoWardGame(ShowBase):
                     pass
         return None
 
+    def _setup_vignette(self):
+        """暗角遮罩：用程序生成的径向渐变贴图铺满屏幕，压暗四角，增强恐怖聚焦。"""
+        path = os.path.join(TEX_DIR, "vignette.png")
+        if not os.path.exists(path):
+            try:
+                from PIL import Image
+                import numpy as _np
+                s = 512
+                yy, xx = _np.mgrid[0:s, 0:s]
+                cx = cy = s / 2
+                d = _np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2) / (s / 2)
+                alpha = _np.clip((d - 0.55) / 0.5, 0, 1) ** 1.6
+                rgba = _np.zeros((s, s, 4), dtype=_np.uint8)
+                rgba[..., 3] = (alpha * 235).astype(_np.uint8)
+                os.makedirs(TEX_DIR, exist_ok=True)
+                Image.fromarray(rgba).save(path)
+            except Exception as e:
+                print("vignette gen failed (non-fatal):", e)
+                return
+        try:
+            self.vignette = OnscreenImage(image=_tex_path("vignette.png"),
+                                          pos=(0, 0, 0), scale=(1.34, 1, 1))
+            self.vignette.setTransparency(True)
+            self.vignette.setBin("fixed", 10)
+        except Exception as e:
+            print("vignette load failed (non-fatal):", e)
+
     def _setup_hud(self):
+        self._setup_vignette()
         self.cn_font = self._load_cn_font()
         common = dict(scale=0.05, fg=(0.82, 0.86, 0.9, 1), align=TextNode.ALeft, mayChange=True)
         if self.cn_font:
@@ -650,7 +789,7 @@ class EchoWardGame(ShowBase):
         if not hasattr(self, "hud"):
             return
         if not self.mouse_captured:
-            self.hud.setText("回声病房 / Echo Ward\n【鼠标左键点击窗口开始】\n"
+            self.hud.setText("回声病房 / Echo Ward\n【鼠标已释放 — 点击窗口重新控制视角】\n"
                              "WASD 移动 | 鼠标 视角 | F 手电 | E 交互 | C 蹲下 | F5/F9 存读档")
         else:
             fl = "开" if self.flashlight_on else "关"
@@ -669,17 +808,22 @@ class EchoWardGame(ShowBase):
         dt = globalClock.getDt()
         self.noise_this_frame = 0.0
 
-        # 视角
-        if (self.mouse_captured and self.mouseWatcherNode is not None
-                and hasattr(self.win, "getPointer") and self.mouseWatcherNode.hasMouse()):
+        # 视角（M_relative：pointer 的绝对值即为相对累积，用差分得到帧位移）
+        if (self.mouse_captured and hasattr(self.win, "getPointer")):
             md = self.win.getPointer(0)
-            cx, cy = self.win.getXSize() / 2, self.win.getYSize() / 2
-            self.heading -= (md.getX() - cx) * self.mouse_sensitivity
-            self.pitch -= (md.getY() - cy) * self.mouse_sensitivity
-            self.pitch = max(-89, min(89, self.pitch))
-            self.player.setH(self.heading)
-            self.camera.setP(self.pitch)
-            self._center_mouse()
+            if md.getInWindow() or self._last_mouse is not None:
+                mx, my = md.getX(), md.getY()
+                if self._last_mouse is not None:
+                    dx = mx - self._last_mouse[0]
+                    dy = my - self._last_mouse[1]
+                    # 过滤异常大跳变（切窗/重置）
+                    if abs(dx) < 200 and abs(dy) < 200:
+                        self.heading -= dx * self.mouse_sensitivity
+                        self.pitch -= dy * self.mouse_sensitivity
+                        self.pitch = max(-89, min(89, self.pitch))
+                        self.player.setH(self.heading)
+                        self.camera.setP(self.pitch)
+                self._last_mouse = (mx, my)
 
         moving = False
         if self.mouse_captured and not self.game_over:
@@ -749,9 +893,22 @@ class EchoWardGame(ShowBase):
             cur = self.music_chase.getVolume()
             self.music_chase.setVolume(cur + (target - cur) * min(1.0, dt * 2.0))
 
+        # 日光灯闪烁（护士接近/追逐时更不稳定，恐怖增强）
+        t_now = globalClock.getFrameTime()
+        instability = 0.15 + 0.5 * self.stress
+        for fl in self.fluorescents:
+            flick = 0.5 + 0.5 * math.sin(t_now * 6.0 + fl["phase"])
+            spike = 1.0 if (math.sin(t_now * 23.0 + fl["phase"]) > (0.9 - instability)) else 0.0
+            level = fl["base"] * (0.75 + 0.25 * flick) * (0.35 if spike else 1.0)
+            fl["light"].setColor(Vec4(level, level * 1.03, level * 1.06, 1))
+            fl["tube"].setColorScale(level * 3, level * 3.1, level * 3.3, 1)
+
         # 防火门指示：集齐证据变绿
         if len(self.collected) >= len(EVIDENCE_IDS):
-            self.exit_door.setColor(0.15, 0.5, 0.2, 1)
+            self.exit_door.setColorScale(0.4, 1.3, 0.5, 1)
+            if not getattr(self, "_exit_lit", False):
+                self.render.setLight(self.exit_light_np)
+                self._exit_lit = True
 
         if hasattr(self, "audio3d"):
             self.audio3d.update()
