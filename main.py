@@ -37,6 +37,9 @@ ENTRIES = [
      "assets_gen/make_textures.py", "工具"),
 ]
 
+# Blender 模型生成需在 Blender 内运行，不走本菜单：
+#   blender.exe --background --python assets_gen/make_models_blender.py
+
 
 def _print_header():
     print("=" * 56)

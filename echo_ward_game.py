@@ -467,53 +467,92 @@ class EchoWardGame(ShowBase):
         self._last_mouse = None
         self._disable_ime()
         # 抢占前台焦点，并在启动后自动进入视角控制（不再依赖点击）
-        if hasattr(self.win, "requestProperties"):
-            fg = WindowProperties()
-            fg.setForeground(True)
-            self.win.requestProperties(fg)
         self._release_mouse()
-        # 延迟一帧再捕获，确保窗口已就绪
-        self.taskMgr.doMethodLater(0.3, self._auto_capture, "auto_capture")
+        # 窗口就绪后：抢焦点 + 关输入法 + 捕获鼠标（延迟确保 hwnd 有效）
+        self.taskMgr.doMethodLater(0.25, self._grab_focus_and_capture, "grab_focus")
 
-    def _auto_capture(self, task):
+    def _grab_focus_and_capture(self, task):
+        self._force_foreground()
+        self._disable_ime()
         if not self.mouse_captured and not self.game_over:
             self._capture_mouse()
         return task.done
 
-    def _disable_ime(self):
-        if sys.platform != "win32":
-            return
+    def _get_hwnd(self):
         try:
             if not hasattr(self.win, "getWindowHandle"):
-                return
+                return 0
             handle = self.win.getWindowHandle()
             if handle is None:
-                return
-            hwnd = handle.getIntHandle()
-            if hwnd:
-                import ctypes
-                ctypes.windll.imm32.ImmAssociateContext(hwnd, 0)
+                return 0
+            return handle.getIntHandle() or 0
+        except Exception:
+            return 0
+
+    def _force_foreground(self):
+        """用 Win32 API 强制把游戏窗口拉到前台并抢占键鼠焦点。
+        这是修复'不能转视角/光标不隐藏/Shift 切输入法'的关键——
+        子进程启动的窗口默认在后台，拿不到键鼠输入。"""
+        if sys.platform != "win32":
+            return
+        hwnd = self._get_hwnd()
+        if not hwnd:
+            return
+        try:
+            import ctypes
+            u = ctypes.windll.user32
+            ASFW_ANY = -1
+            SW_SHOW = 5
+            u.AllowSetForegroundWindow(ASFW_ANY)
+            u.ShowWindow(hwnd, SW_SHOW)
+            u.BringWindowToTop(hwnd)
+            u.SetForegroundWindow(hwnd)
+            u.SetActiveWindow(hwnd)
+            u.SetFocus(hwnd)
+        except Exception as e:
+            print("force foreground failed (non-fatal):", e)
+
+    def _disable_ime(self):
+        """分离窗口的输入法上下文，避免 Shift 等键被输入法拦截切中英文。"""
+        if sys.platform != "win32":
+            return
+        hwnd = self._get_hwnd()
+        if not hwnd:
+            return
+        try:
+            import ctypes
+            ctypes.windll.imm32.ImmAssociateContext(hwnd, 0)
         except Exception as e:
             print("disable IME failed (non-fatal):", e)
 
     # ---------- 护士 ----------
 
     def _setup_nurse(self):
-        # 用一个纵向盒作躯干 + 顶部小盒作头，苍白护士感
         self.nurse_node = NodePath("nurse")
         self.nurse_node.reparentTo(self.render)
-        self.nurse_node.setPos(0, 40, 0.9)
-        body = self.loader.loadModel("models/box")
-        body.setScale(0.5, 0.5, 1.4)
-        body.setPos(-0.25, -0.25, -0.9)
-        body.setColor(0.82, 0.83, 0.86, 1)
-        body.reparentTo(self.nurse_node)
-        head = self.loader.loadModel("models/box")
-        head.setScale(0.32, 0.32, 0.32)
-        head.setPos(-0.16, -0.16, 0.55)
-        head.setColor(0.9, 0.88, 0.85, 1)
-        head.setColorScale(1.3, 1.3, 1.3, 1)
-        head.reparentTo(self.nurse_node)
+        self.nurse_node.setPos(0, 40, 0.0)  # 模型脚在 z≈0
+
+        model_path = os.path.join(ROOT, "assets", "models", "nurse.glb")
+        model = None
+        if os.path.exists(model_path):
+            model = self.loader.loadModel(
+                Filename.fromOsSpecific(model_path).getFullpath())
+        if model:
+            model.reparentTo(self.nurse_node)
+            model.setColorScale(1.15, 1.15, 1.2, 1)  # 略微苍白发亮
+        else:
+            # 回退：盒子拼人形
+            body = self.loader.loadModel("models/box")
+            body.setScale(0.5, 0.5, 1.4)
+            body.setPos(-0.25, -0.25, 0.3)
+            body.setColor(0.82, 0.83, 0.86, 1)
+            body.reparentTo(self.nurse_node)
+            head = self.loader.loadModel("models/box")
+            head.setScale(0.32, 0.32, 0.32)
+            head.setPos(-0.16, -0.16, 1.75)
+            head.setColor(0.9, 0.88, 0.85, 1)
+            head.reparentTo(self.nurse_node)
+        self.nurse_model = model
         waypoints = [(-3, 10), (3, 16), (-3, 26), (3, 32), (0, 38)]
         self.nurse = NurseAI(self.nurse_node, waypoints)
 
@@ -574,16 +613,17 @@ class EchoWardGame(ShowBase):
     # ---------- 鼠标 / 输入 ----------
 
     def _capture_mouse(self):
-        """进入视角控制：用 M_relative（相对模式）——系统自动隐藏并锁定光标，
-        每帧从 pointer 读到的是相对位移，无需手动回中，兼容性最好。"""
+        """进入视角控制：隐藏光标 + 绝对模式，每帧读指针位置算相对中心的位移，
+        再把指针拉回中心（recenter 方案）。这是 Panda3D 上最稳的第一人称做法，
+        不依赖 M_relative 的平台差异。"""
+        self._force_foreground()
         if hasattr(self.win, "requestProperties"):
             props = WindowProperties()
             props.setCursorHidden(True)
-            props.setMouseMode(WindowProperties.M_relative)
-            props.setForeground(True)
+            props.setMouseMode(WindowProperties.M_absolute)
             self.win.requestProperties(props)
         self.mouse_captured = True
-        self._last_mouse = None
+        self._center_mouse()
 
     def _release_mouse(self):
         if hasattr(self.win, "requestProperties"):
@@ -617,6 +657,18 @@ class EchoWardGame(ShowBase):
         self.accept("f5", self._do_save)
         self.accept("f9", self._do_load)
         self.accept("r", self._restart)
+        self.accept("f3", self._toggle_debug)
+        # 兜底：任何时候按空格都强制重新抢焦点并捕获鼠标
+        self.accept("space", self._grab_focus_and_capture_now)
+        self.show_debug = False
+
+    def _toggle_debug(self):
+        self.show_debug = not self.show_debug
+
+    def _grab_focus_and_capture_now(self):
+        self._force_foreground()
+        self._disable_ime()
+        self._capture_mouse()
 
     def _on_escape(self):
         if self.mouse_captured:
@@ -724,7 +776,7 @@ class EchoWardGame(ShowBase):
             node.show()
         self.player.setPos(0, 1, 1.6)
         self.heading = 0.0
-        self.nurse_node.setPos(0, 40, 0.9)
+        self.nurse_node.setPos(0, 40, 0.0)
         self.nurse.state = NurseAI.PATROL
         self.nurse.awareness = 0.0
         self.nurse.caught = False
@@ -783,6 +835,9 @@ class EchoWardGame(ShowBase):
         self.msg = OnscreenText(text="", pos=(0, -0.82), scale=0.055,
                                 fg=(0.95, 0.9, 0.8, 1), align=TextNode.ACenter,
                                 mayChange=True, font=self.cn_font if self.cn_font else None)
+        self.dbg = OnscreenText(text="", pos=(0.98, 0.90), scale=0.045,
+                                fg=(0.5, 1.0, 0.6, 1), align=TextNode.ALeft,
+                                mayChange=True, font=self.cn_font if self.cn_font else None)
         self._refresh_hud()
 
     def _refresh_hud(self):
@@ -802,39 +857,76 @@ class EchoWardGame(ShowBase):
             )
         self.msg.setText(self.message if self.msg_timer > 0 or self.game_over else "")
 
+        # F3 诊断浮层
+        if getattr(self, "show_debug", False):
+            hwnd = self._get_hwnd()
+            focused = False
+            ptr = "n/a"
+            if sys.platform == "win32":
+                try:
+                    import ctypes
+                    focused = (ctypes.windll.user32.GetForegroundWindow() == hwnd)
+                except Exception:
+                    pass
+            if hasattr(self.win, "getPointer") and self.win.hasSize():
+                md = self.win.getPointer(0)
+                ptr = f"({md.getX()},{md.getY()}) inWin={md.getInWindow()}"
+            self.dbg.setText(
+                f"[F3 诊断] hwnd={hwnd} 前台焦点={focused}\n"
+                f"鼠标捕获={self.mouse_captured} 指针={ptr}\n"
+                f"heading={self.heading:.1f} pitch={self.pitch:.1f}\n"
+                f"若焦点=False：按空格抢焦点；方向键可转视角作备选"
+            )
+        else:
+            self.dbg.setText("")
+
     # ---------- 主循环 ----------
 
     def _update(self, task):
         dt = globalClock.getDt()
         self.noise_this_frame = 0.0
 
-        # 视角（M_relative：pointer 的绝对值即为相对累积，用差分得到帧位移）
-        if (self.mouse_captured and hasattr(self.win, "getPointer")):
+        # 视角（recenter 方案）：读指针相对窗口中心的偏移，应用后拉回中心
+        if (self.mouse_captured and hasattr(self.win, "getPointer")
+                and self.win.hasSize()):
             md = self.win.getPointer(0)
-            if md.getInWindow() or self._last_mouse is not None:
-                mx, my = md.getX(), md.getY()
-                if self._last_mouse is not None:
-                    dx = mx - self._last_mouse[0]
-                    dy = my - self._last_mouse[1]
-                    # 过滤异常大跳变（切窗/重置）
-                    if abs(dx) < 200 and abs(dy) < 200:
-                        self.heading -= dx * self.mouse_sensitivity
-                        self.pitch -= dy * self.mouse_sensitivity
-                        self.pitch = max(-89, min(89, self.pitch))
-                        self.player.setH(self.heading)
-                        self.camera.setP(self.pitch)
-                self._last_mouse = (mx, my)
+            cx = self.win.getXSize() // 2
+            cy = self.win.getYSize() // 2
+            if md.getInWindow():
+                dx = md.getX() - cx
+                dy = md.getY() - cy
+                if abs(dx) < 400 and abs(dy) < 400 and (dx or dy):
+                    self.heading -= dx * self.mouse_sensitivity
+                    self.pitch -= dy * self.mouse_sensitivity
+                    self.pitch = max(-89, min(89, self.pitch))
+                    self.player.setH(self.heading)
+                    self.camera.setP(self.pitch)
+            self._center_mouse()
+
+        # 方向键转视角（鼠标失效时的备选，与 WASD 移动分离）
+        if not self.game_over:
+            turn = 90.0 * dt
+            if self._is_down(self.btn_left):
+                self.heading += turn
+            if self._is_down(self.btn_right):
+                self.heading -= turn
+            if self._is_down(self.btn_up):
+                self.pitch = min(89, self.pitch + turn)
+            if self._is_down(self.btn_down):
+                self.pitch = max(-89, self.pitch - turn)
+            self.player.setH(self.heading)
+            self.camera.setP(self.pitch)
 
         moving = False
         if self.mouse_captured and not self.game_over:
             move = Vec3(0, 0, 0)
-            if self._is_down(self.btn_w) or self._is_down(self.btn_up):
+            if self._is_down(self.btn_w):
                 move.y += 1
-            if self._is_down(self.btn_s) or self._is_down(self.btn_down):
+            if self._is_down(self.btn_s):
                 move.y -= 1
-            if self._is_down(self.btn_a) or self._is_down(self.btn_left):
+            if self._is_down(self.btn_a):
                 move.x -= 1
-            if self._is_down(self.btn_d) or self._is_down(self.btn_right):
+            if self._is_down(self.btn_d):
                 move.x += 1
             running = self._is_down(self.btn_shift) and not self.crouching and self.stamina > 0.05
             if self.crouching:
