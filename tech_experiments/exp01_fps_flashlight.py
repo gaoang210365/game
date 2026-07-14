@@ -168,10 +168,33 @@ class Experiment01(ShowBase):
         self.camLens.setFov(75)
         self.camLens.setNear(0.1)
 
+        # 让窗口脱离输入法(IME)：即使误按 Shift 切换了中英文，
+        # 按键也直接以原始信号进入游戏，不会再被当作文本输入。
+        self._disable_ime()
+
         # 启动时不隐藏/锁定鼠标：先让玩家能点击窗口获取焦点。
         # 点击窗口后进入"捕获"模式（隐藏光标 + 视角控制），Esc 释放。
         self.mouse_captured = False
         self._release_mouse()
+
+    def _disable_ime(self):
+        """在 Windows 上分离窗口的 IME 上下文，避免输入法拦截按键。"""
+        if sys.platform != "win32":
+            return
+        try:
+            if not hasattr(self.win, "getWindowHandle"):
+                return
+            handle = self.win.getWindowHandle()
+            if handle is None:
+                return
+            hwnd = handle.getIntHandle()
+            if not hwnd:
+                return
+            import ctypes
+            # ImmAssociateContext(hwnd, NULL) 断开该窗口与输入法的关联
+            ctypes.windll.imm32.ImmAssociateContext(hwnd, 0)
+        except Exception as e:
+            print("disable IME failed (non-fatal):", e)
 
     def _capture_mouse(self):
         """进入视角控制模式：隐藏光标并锁定在窗口内。"""
