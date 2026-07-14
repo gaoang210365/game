@@ -388,6 +388,17 @@ class Experiment03(ShowBase):
             self.player.setZ(1.6)
         return task.cont
 
+    def _on_escape(self):
+        if self.mouse_captured:
+            self._release_mouse()
+        else:
+            sys.exit()
+
+    def _is_down(self, button):
+        mw = self.mouseWatcherNode
+        return (mw is not None and hasattr(mw, "is_button_down")
+                and mw.is_button_down(button))
+
 
 def _run_selftest():
     """离屏自测：不开窗口，验证存档核心逻辑（存/读/迁移/损坏/无凭据）。
@@ -471,13 +482,3 @@ if __name__ == "__main__":
         sys.exit(_run_selftest())
     app = Experiment03()
     app.run()
-
-    def _on_escape(self):
-        if self.mouse_captured:
-            self._release_mouse()
-        else:
-            sys.exit()
-
-    def _is_down(self, button):
-        mw = self.mouseWatcherNode
-        return mw is not None and hasattr(mw, "is_button_down") and mw.is_button_down(button)
