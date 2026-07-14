@@ -30,7 +30,7 @@ from panda3d.core import (
     CardMaker, Vec3, Vec4, Point3, NodePath, WindowProperties,
     CollisionTraverser, CollisionHandlerPusher, CollisionNode,
     CollisionSphere, CollisionBox, BitMask32, TextNode,
-    ClockObject,
+    ClockObject, KeyboardButton,
 )
 from direct.gui.OnscreenText import OnscreenText
 import sys
@@ -202,13 +202,20 @@ class Experiment01(ShowBase):
                                  int(self.win.getYSize() / 2))
 
     def _setup_input(self):
+        # 移动键改为每帧轮询硬件状态，绕开输入法(IME)对字母键的文本拦截。
+        self.btn_w = KeyboardButton.ascii_key("w")
+        self.btn_a = KeyboardButton.ascii_key("a")
+        self.btn_s = KeyboardButton.ascii_key("s")
+        self.btn_d = KeyboardButton.ascii_key("d")
+        self.btn_shift = KeyboardButton.shift()
+        # 上下方向键作为 WASD 的备选，进一步规避输入法影响
+        self.btn_up = KeyboardButton.up()
+        self.btn_down = KeyboardButton.down()
+        self.btn_left = KeyboardButton.left()
+        self.btn_right = KeyboardButton.right()
+        # 这些只做单次动作，仍用事件
         self.accept("escape", self._on_escape)
         self.accept("mouse1", self._capture_mouse)  # 左键点击窗口进入视角控制
-        for k in ("w", "s", "a", "d"):
-            self.accept(k, self._set_key, [k, True])
-            self.accept(k + "-up", self._set_key, [k, False])
-        self.accept("shift", self._set_key, ["run", True])
-        self.accept("shift-up", self._set_key, ["run", False])
         self.accept("f", self._toggle_flashlight)
 
     def _on_escape(self):
@@ -218,11 +225,9 @@ class Experiment01(ShowBase):
         else:
             sys.exit()
 
-    def _set_key(self, key, value):
-        # 未捕获鼠标时不响应移动，避免与窗口交互冲突
-        if not self.mouse_captured:
-            return
-        self.keys[key] = value
+    def _is_down(self, button):
+        mw = self.mouseWatcherNode
+        return mw is not None and hasattr(mw, "is_button_down") and mw.is_button_down(button)
 
     def _toggle_flashlight(self):
         self.flashlight_on = not self.flashlight_on
@@ -282,17 +287,25 @@ class Experiment01(ShowBase):
             self.camera.setP(self.pitch)
             self._center_mouse()
 
-        # 移动
-        speed = self.run_speed if self.keys["run"] else self.walk_speed
+        # 移动：仅在捕获模式下响应，每帧轮询硬件按键状态
         move = Vec3(0, 0, 0)
-        if self.keys["w"]:
-            move.y += 1
-        if self.keys["s"]:
-            move.y -= 1
-        if self.keys["a"]:
-            move.x -= 1
-        if self.keys["d"]:
-            move.x += 1
+        if self.mouse_captured:
+            fwd = self._is_down(self.btn_w) or self._is_down(self.btn_up)
+            back = self._is_down(self.btn_s) or self._is_down(self.btn_down)
+            left = self._is_down(self.btn_a) or self._is_down(self.btn_left)
+            right = self._is_down(self.btn_d) or self._is_down(self.btn_right)
+            running = self._is_down(self.btn_shift)
+            speed = self.run_speed if running else self.walk_speed
+            if fwd:
+                move.y += 1
+            if back:
+                move.y -= 1
+            if left:
+                move.x -= 1
+            if right:
+                move.x += 1
+        else:
+            speed = self.walk_speed
         if move.length() > 0:
             move.normalize()
             rad = math.radians(self.heading)
