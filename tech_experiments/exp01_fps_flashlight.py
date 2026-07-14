@@ -168,15 +168,31 @@ class Experiment01(ShowBase):
         self.camLens.setFov(75)
         self.camLens.setNear(0.1)
 
-        # 仅在真实窗口下设置光标、鼠标模式并主动抢占前台焦点
-        # （从终端启动时，焦点常留在终端，导致按键被终端接收）
+        # 启动时不隐藏/锁定鼠标：先让玩家能点击窗口获取焦点。
+        # 点击窗口后进入"捕获"模式（隐藏光标 + 视角控制），Esc 释放。
+        self.mouse_captured = False
+        self._release_mouse()
+
+    def _capture_mouse(self):
+        """进入视角控制模式：隐藏光标并锁定在窗口内。"""
         if hasattr(self.win, "requestProperties"):
             props = WindowProperties()
             props.setCursorHidden(True)
             props.setMouseMode(WindowProperties.M_confined)
-            props.setForeground(True)
             self.win.requestProperties(props)
+        self.mouse_captured = True
         self._center_mouse()
+        self._refresh_hud()
+
+    def _release_mouse(self):
+        """释放鼠标：显示光标，可自由点击/移出窗口。"""
+        if hasattr(self.win, "requestProperties"):
+            props = WindowProperties()
+            props.setCursorHidden(False)
+            props.setMouseMode(WindowProperties.M_absolute)
+            self.win.requestProperties(props)
+        self.mouse_captured = False
+        self._refresh_hud()
 
     def _center_mouse(self):
         if (self.win is not None and hasattr(self.win, "movePointer")
@@ -186,7 +202,8 @@ class Experiment01(ShowBase):
                                  int(self.win.getYSize() / 2))
 
     def _setup_input(self):
-        self.accept("escape", sys.exit)
+        self.accept("escape", self._on_escape)
+        self.accept("mouse1", self._capture_mouse)  # 左键点击窗口进入视角控制
         for k in ("w", "s", "a", "d"):
             self.accept(k, self._set_key, [k, True])
             self.accept(k + "-up", self._set_key, [k, False])
@@ -194,7 +211,17 @@ class Experiment01(ShowBase):
         self.accept("shift-up", self._set_key, ["run", False])
         self.accept("f", self._toggle_flashlight)
 
+    def _on_escape(self):
+        """Esc：若已捕获鼠标则先释放，否则退出。"""
+        if self.mouse_captured:
+            self._release_mouse()
+        else:
+            sys.exit()
+
     def _set_key(self, key, value):
+        # 未捕获鼠标时不响应移动，避免与窗口交互冲突
+        if not self.mouse_captured:
+            return
         self.keys[key] = value
 
     def _toggle_flashlight(self):
@@ -217,19 +244,30 @@ class Experiment01(ShowBase):
         self._refresh_hud()
 
     def _refresh_hud(self):
+        if not hasattr(self, "hud"):
+            return
         fl = "ON" if self.flashlight_on else "OFF"
-        self.hud.setText(
-            "Echo Ward - Tech Exp 01\n"
-            "WASD move | Shift run | F flashlight | Esc quit\n"
-            "若无法移动：先用鼠标点一下本窗口获取焦点\n"
-            f"Flashlight: {fl}"
-        )
+        if not getattr(self, "mouse_captured", False):
+            self.hud.setText(
+                "Echo Ward - Tech Exp 01\n"
+                "【鼠标左键点击窗口开始】\n"
+                "点击后：WASD 移动 | Shift 奔跑 | F 手电筒 | Esc 释放鼠标\n"
+                f"Flashlight: {fl}"
+            )
+        else:
+            self.hud.setText(
+                "Echo Ward - Tech Exp 01\n"
+                "WASD 移动 | Shift 奔跑 | F 手电筒\n"
+                "Esc 释放鼠标（再按一次退出）\n"
+                f"Flashlight: {fl}"
+            )
 
     def _update(self, task):
         dt = globalClock.getDt()
 
-        # 鼠标视角（离屏模式下 mouseWatcherNode 可能为 None）
-        if (self.mouseWatcherNode is not None
+        # 鼠标视角：仅在捕获模式下生效（离屏模式下 mouseWatcherNode 可能为 None）
+        if (self.mouse_captured
+                and self.mouseWatcherNode is not None
                 and hasattr(self.win, "getPointer")
                 and self.mouseWatcherNode.hasMouse()):
             md = self.win.getPointer(0)
