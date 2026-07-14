@@ -246,7 +246,7 @@ class EchoWardGame(ShowBase):
         self.stress = 0.0
         self.game_over = False
         self.win = False
-        self.message = "在废弃住院部醒来。找齐 4 份证据，再从走廊尽头的防火门离开。"
+        self.message = "【先用鼠标左键点一下窗口】点击后即可用鼠标转视角。找齐 4 份证据，从走廊尽头防火门离开。"
         self.msg_timer = 6.0
         self.noise_this_frame = 0.0
 
@@ -490,9 +490,12 @@ class EchoWardGame(ShowBase):
             return 0
 
     def _force_foreground(self):
-        """用 Win32 API 强制把游戏窗口拉到前台并抢占键鼠焦点。
-        这是修复'不能转视角/光标不隐藏/Shift 切输入法'的关键——
-        子进程启动的窗口默认在后台，拿不到键鼠输入。"""
+        """强制把游戏窗口拉到前台并抢占键鼠焦点。
+
+        Windows 有'焦点窃取保护'：非前台进程直接调用 SetForegroundWindow 会被
+        静默忽略。可靠解法是先用 AttachThreadInput 把本线程挂到当前前台线程的
+        输入队列上（这样调用才被允许），再配合模拟一次 ALT 键清除前台锁定。
+        """
         if sys.platform != "win32":
             return
         hwnd = self._get_hwnd()
@@ -500,15 +503,37 @@ class EchoWardGame(ShowBase):
             return
         try:
             import ctypes
+            from ctypes import wintypes
             u = ctypes.windll.user32
+            k = ctypes.windll.kernel32
+
+            SW_RESTORE = 9
+            KEYEVENTF_KEYUP = 0x0002
+            VK_MENU = 0x12  # ALT
             ASFW_ANY = -1
-            SW_SHOW = 5
+
             u.AllowSetForegroundWindow(ASFW_ANY)
-            u.ShowWindow(hwnd, SW_SHOW)
+
+            fg = u.GetForegroundWindow()
+            fg_thread = u.GetWindowThreadProcessId(fg, None)
+            our_thread = k.GetCurrentThreadId()
+
+            # ALT 键脉冲：清除前台锁定计时器，让 SetForegroundWindow 生效
+            u.keybd_event(VK_MENU, 0, 0, 0)
+            u.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+
+            attached = False
+            if fg_thread and fg_thread != our_thread:
+                attached = bool(u.AttachThreadInput(fg_thread, our_thread, True))
+
+            u.ShowWindow(hwnd, SW_RESTORE)
             u.BringWindowToTop(hwnd)
             u.SetForegroundWindow(hwnd)
             u.SetActiveWindow(hwnd)
             u.SetFocus(hwnd)
+
+            if attached:
+                u.AttachThreadInput(fg_thread, our_thread, False)
         except Exception as e:
             print("force foreground failed (non-fatal):", e)
 
@@ -855,7 +880,10 @@ class EchoWardGame(ShowBase):
                 f"护士状态：{st} | 察觉度：{self.nurse.awareness:.0%}\n"
                 f"体力：{self.stamina:.0%}"
             )
-        self.msg.setText(self.message if self.msg_timer > 0 or self.game_over else "")
+        if not self.mouse_captured and not self.game_over:
+            self.msg.setText("【用鼠标左键点一下窗口】点击后可用鼠标转视角；也可用方向键转视角、空格强制抢焦点")
+        else:
+            self.msg.setText(self.message if self.msg_timer > 0 or self.game_over else "")
 
         # F3 诊断浮层
         if getattr(self, "show_debug", False):
