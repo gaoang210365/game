@@ -21,15 +21,34 @@
 
 ```text
 game/
+├── main.py              # 统一启动入口（菜单，选择并运行 demo）
 ├── docs/                # 设计文档（01～11）
 ├── tech_experiments/    # 阶段1 技术验证 demo
 ├── assets/              # 资源（模型/贴图/音频）
 └── README.md
 ```
 
-## 运行技术验证
+## 快速开始（统一入口）
 
-使用游戏专用虚拟环境运行：
+用游戏专用虚拟环境运行 `main.py`，会弹出菜单，选择编号即可体验对应 demo。
+随着开发推进，新内容会持续加入这个菜单，运行它即可实时体验最新进度。
+
+```powershell
+D:\Users\21036\PycharmProjects\PythonProject\game_env\Scripts\python.exe main.py
+```
+
+也可直接运行指定 demo，或只列出条目：
+
+```powershell
+# 直接运行 exp01
+D:\Users\21036\PycharmProjects\PythonProject\game_env\Scripts\python.exe main.py --run exp01
+# 只列出可体验条目
+D:\Users\21036\PycharmProjects\PythonProject\game_env\Scripts\python.exe main.py --list
+```
+
+## 单独运行某个技术验证
+
+也可以绕过入口，直接运行单个实验脚本：
 
 ```powershell
 D:\Users\21036\PycharmProjects\PythonProject\game_env\Scripts\python.exe tech_experiments\exp01_fps_flashlight.py

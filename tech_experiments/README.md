@@ -16,9 +16,41 @@ D:\Users\21036\PycharmProjects\PythonProject\game_env\Scripts\python.exe tech_ex
 |---|---|---|---|
 | exp01 | exp01_fps_flashlight.py | 第一人称控制 + 碰撞 + 灯光 + 手电筒 | 已实现，待真机窗口确认 |
 | exp02 | exp02_audio_3d.py | 3D 音源与距离衰减 | 已实现，待真机听感确认 |
-| exp03 | （计划）exp03_save_load.py | 存档读写原型 | 计划中 |
+| exp03 | exp03_save_load.py | 存档读写原型（存/读/迁移/损坏保护） | 已实现，自测通过 |
 | exp04 | （计划）exp04_ai_state.py | AI 状态机与路径移动 | 计划中 |
 | exp05 | （计划）exp05_packaging | Windows 打包验证 | 计划中 |
+
+## exp03 说明
+
+### 目标
+验证存档读写机制（对应技术设计文档第 6 节），支撑"单槽自动存档 + 章节检查点"设计。带一个可移动玩家与三个可拾取证据，产生真实游戏状态用于存/读。
+
+### 操作
+- 左键点击窗口开始
+- WASD/方向键 移动 | 鼠标 视角
+- E 拾取附近证据（2m 内最近一个）
+- F5 存档 | F9 读档 | N 推进循环层
+- Esc 释放鼠标（再按一次退出）
+
+### 存档设计要点
+- 存档写入 `saves/autosave.json`（已被 .gitignore 排除，不入库）。
+- **原子写入**：先写 `.tmp` 再 `os.replace`，避免写入中断损坏存档。
+- **版本号 + 迁移占位**：`SAVE_VERSION` 变化时走 `_migrate` 兼容旧档。
+- **损坏保护**：JSON 解析失败时 `load()` 安全返回 `None`，不崩溃。
+- **无凭据原则**：只序列化玩家位置/朝向、已拾取证据、循环层、事件标记等纯游戏数据，绝不写入任何密钥/令牌。
+
+### 已验证（离屏自测）
+运行离屏自测，无需开窗口：
+
+```powershell
+game_env\Scripts\python.exe tech_experiments\exp03_save_load.py --selftest
+```
+
+自测覆盖：无存档返回 None、原子写入无残留 `.tmp`、读回一致、含版本号与时间戳、不含疑似凭据字段、旧版本迁移、损坏存档安全降级。退出码 0 表示全部通过。
+
+### 待人工确认（需真实窗口）
+- 拾取交互手感与提示可读性
+- 存档/读档后玩家位置、朝向、已拾取证据、循环层是否完整恢复
 
 ## exp02 说明
 
