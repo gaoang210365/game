@@ -1,0 +1,29 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+game_env/
+
+# Build
+build/
+dist/
+*.spec
+
+# Saves & logs
+saves/
+*.log
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Secrets (never commit)
+*.key
+.env
+auth.json
+config.local.json
