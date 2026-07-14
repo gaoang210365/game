@@ -881,7 +881,7 @@ class EchoWardGame(ShowBase):
                 f"体力：{self.stamina:.0%}"
             )
         if not self.mouse_captured and not self.game_over:
-            self.msg.setText("【用鼠标左键点一下窗口】点击后可用鼠标转视角；也可用方向键转视角、空格强制抢焦点")
+            self.msg.setText("点击画面开始   (Click to play)")
         else:
             self.msg.setText(self.message if self.msg_timer > 0 or self.game_over else "")
 
