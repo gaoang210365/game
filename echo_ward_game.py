@@ -624,6 +624,16 @@ class EchoWardGame(ShowBase):
         if self.sfx_heartbeat:
             self.sfx_heartbeat.play()
 
+        # 音乐：探索背景乐（循环，常驻低音量，营造氛围）
+        self.music_explore = None
+        explore_path = os.path.join(MUSIC_DIR, "menu_theme.wav")
+        if os.path.exists(explore_path):
+            self.music_explore = self.loader.loadSfx(_music_path("menu_theme.wav"))
+            self.music_explore.setLoop(True)
+            self.music_explore_base_vol = 0.30
+            self.music_explore.setVolume(self.music_explore_base_vol)
+            self.music_explore.play()
+
         # 音乐：追逐（循环，默认静音，进入追逐淡入）
         self.music_chase = None
         chase_path = os.path.join(MUSIC_DIR, "chase.wav")
