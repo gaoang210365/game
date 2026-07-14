@@ -282,38 +282,14 @@ class EchoWardGame(ShowBase):
         self.level = NodePath("level")
         self.level.reparentTo(self.render)
 
-        # 贴图
+        # 贴图（保留供回退灰盒/门使用）
         self.tex_floor = self._load_tex("floor_tile.png")
         self.tex_wall = self._load_tex("wall.png")
         self.tex_ceiling = self._load_tex("ceiling.png")
         self.tex_door = self._load_tex("door.png")
         self.tex_metal = self._load_tex("metal.png")
 
-        # 地板（贴地砖，按尺寸平铺）
-        cm = CardMaker("floor")
-        cm.setFrame(-6, 6, -2, 46)
-        cm.setUvRange((0, 0), (6, 24))
-        floor = self.render.attachNewNode(cm.generate())
-        floor.setP(-90)
-        if self.tex_floor:
-            floor.setTexture(self.tex_floor)
-        else:
-            floor.setColor(0.16, 0.17, 0.18, 1)
-        floor.reparentTo(self.level)
-        # 天花板
-        cmc = CardMaker("ceil")
-        cmc.setFrame(-6, 6, -2, 46)
-        cmc.setUvRange((0, 0), (6, 24))
-        ceil = self.render.attachNewNode(cmc.generate())
-        ceil.setP(90)
-        ceil.setZ(3.0)
-        if self.tex_ceiling:
-            ceil.setTexture(self.tex_ceiling)
-        else:
-            ceil.setColor(0.08, 0.08, 0.10, 1)
-        ceil.reparentTo(self.level)
-
-        # 走廊墙体 + 病房隔断（灰盒）：(中心, 尺寸)
+        # 走廊墙体规格：(中心, 尺寸)。既用于碰撞，也与 hospital_room.glb 几何严格对齐。
         self.walls = []
         wall_specs = [
             (Point3(-5, 22, 0), Vec3(1, 48, 3)),   # 左长墙
@@ -328,17 +304,20 @@ class EchoWardGame(ShowBase):
             (Point3(3, 36, 0), Vec3(4, 1, 3)),
         ]
         for pos, scale in wall_specs:
-            w = self.loader.loadModel("models/box")
-            w.setScale(scale)
-            w.setPos(pos - Point3(scale.x * 0.5, scale.y * 0.5, 0))
-            if self.tex_wall:
-                w.setTexture(self.tex_wall)
-                w.setTexScale(TextureStage.getDefault(),
-                              max(1, scale.x), max(1, scale.z))
-            else:
-                w.setColor(0.22, 0.2, 0.2, 1)
-            w.reparentTo(self.level)
             self.walls.append((pos, scale))
+
+        # 加载 Blender 生成的医院走廊 GLB（地/顶/墙/踢脚/病床/输液架）。
+        # GLB 已按游戏世界坐标系生成，挂到 render 原点即与碰撞盒重合，无需缩放旋转。
+        room_path = os.path.join(ROOT, "assets", "models", "hospital_room.glb")
+        self.room_model = None
+        if os.path.exists(room_path):
+            self.room_model = self.loader.loadModel(
+                Filename.fromOsSpecific(room_path).getFullpath())
+        if self.room_model:
+            self.room_model.reparentTo(self.level)
+        else:
+            # 回退：程序化灰盒（GLB 缺失时仍可玩）
+            self._build_graybox_fallback(wall_specs)
 
         # 证据点（黄色方块，可拾取）
         self.collectibles = {}
@@ -379,6 +358,43 @@ class EchoWardGame(ShowBase):
         self.exit_light.setColor(Vec4(0.1, 0.5, 0.15, 1))
         self.exit_light_np = self.render.attachNewNode(self.exit_light)
         self.exit_light_np.setPos(0, 41, 2.5)
+
+    def _build_graybox_fallback(self, wall_specs):
+        """GLB 缺失时的程序化灰盒场景（地/顶/墙），保证游戏仍可运行。"""
+        cm = CardMaker("floor")
+        cm.setFrame(-6, 6, -2, 46)
+        cm.setUvRange((0, 0), (6, 24))
+        floor = self.render.attachNewNode(cm.generate())
+        floor.setP(-90)
+        if self.tex_floor:
+            floor.setTexture(self.tex_floor)
+        else:
+            floor.setColor(0.16, 0.17, 0.18, 1)
+        floor.reparentTo(self.level)
+
+        cmc = CardMaker("ceil")
+        cmc.setFrame(-6, 6, -2, 46)
+        cmc.setUvRange((0, 0), (6, 24))
+        ceil = self.render.attachNewNode(cmc.generate())
+        ceil.setP(90)
+        ceil.setZ(3.0)
+        if self.tex_ceiling:
+            ceil.setTexture(self.tex_ceiling)
+        else:
+            ceil.setColor(0.08, 0.08, 0.10, 1)
+        ceil.reparentTo(self.level)
+
+        for pos, scale in wall_specs:
+            w = self.loader.loadModel("models/box")
+            w.setScale(scale)
+            w.setPos(pos - Point3(scale.x * 0.5, scale.y * 0.5, 0))
+            if self.tex_wall:
+                w.setTexture(self.tex_wall)
+                w.setTexScale(TextureStage.getDefault(),
+                              max(1, scale.x), max(1, scale.z))
+            else:
+                w.setColor(0.22, 0.2, 0.2, 1)
+            w.reparentTo(self.level)
 
     # ---------- 碰撞 ----------
 

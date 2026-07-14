@@ -42,9 +42,12 @@
 - A. 音乐丢失：已修。原因是平时只有环境底噪、追逐音乐默认静音、menu_theme.wav 从未被加载。
   已在 echo_ward_game.py 的 _setup_audio 里加入 self.music_explore（menu_theme.wav 低音量 0.30 循环常驻）。
   状态：已改代码并编译通过；已提交。
-- C. 建模太丑：游戏当前用程序化灰盒/box。已用 Blender 生成更像样的
-  assets/models/hospital_room.glb（医院房间：墙/地/顶/灯管/病床/输液架/门，Panda3D 可加载）。
-  待办：把游戏场景从灰盒替换为该 GLB（或在其基础上搭建），并调整碰撞与玩家出生点。
+- C. 建模太丑：已修完。重写 tools/gen_hospital_room.py，让 GLB 几何严格按【游戏世界
+  坐标系】生成（地 x∈[-6,6]/y∈[-2,46]，顶 z=3，墙对齐 echo_ward_game.py 的 walls 规格，
+  含踢脚线/病床/输液架）。修正了 add_box 缩放 bug（原来乘 size/2 导致尺寸减半、墙盖不住走廊）。
+  游戏 _build_scene 改为 loadModel 加载 hospital_room.glb 挂到 render 原点（与碰撞盒重合，
+  无需缩放旋转）；灰盒逻辑保留为 _build_graybox_fallback 兜底。离屏测：边界 X[-6,6] Y[-2,46]
+  Z[-0.2,3.2] 完全对齐，加载/60帧无异常。灯管与出口门仍由代码控制（闪烁/开关状态）。
 - B. 手电筒"丢失"：代码里 F 键切换正常、默认开启、聚光灯已设置。离屏测不出画面问题。
   待用户反馈：按 F 是"完全没反应"还是"有反应但看不到光"。
   可能方向：环境光(0.28)偏亮盖过手电、或聚光灯衰减/朝向、或按键焦点。
@@ -59,13 +62,15 @@
 7. 重要：动手前先用 git status / 读真实文件核对磁盘状态，不要凭记忆或把工具回显当已完成。
 
 ## 下一步建议顺序
-1. 接入 hospital_room.glb 替换灰盒场景（任务 C）。
+1. （已完成）接入 hospital_room.glb 替换灰盒场景（任务 C）。
 2. 等用户反馈按 F 现象后修手电筒（任务 B）。
 3. 之后回到阶段1 剩余：exp04 AI/整合、exp05 Windows 打包。
+4. 可选打磨：给 GLB 加贴图 UV/更多病房细节；证据点与躲藏点也可换成模型。
 
 ## 进度时间线
 - 设计文档 01~11 完成并入库。
 - tech_experiments exp01/exp02/exp03 完成，离屏自测通过。
 - 主游戏 echo_ward_game.py + main.py 已存在可运行。
 - 音乐(A)已修并提交；hospital_room.glb 与 tools/ 已入库。
-- 待办：C 接入模型、B 手电筒（等反馈）。
+- 建模(C)已修完：GLB 按游戏坐标系重生成并接入场景，碰撞对齐，离屏测通过。
+- 待办：B 手电筒（等用户反馈按 F 现象）。
