@@ -23,12 +23,16 @@ EXPERIMENTS_DIR = os.path.join(ROOT, "tech_experiments")
 # 菜单条目：(编号, 标题, 相对脚本路径, 状态说明)
 # 新的可体验内容在这里登记即可出现在入口菜单中。
 ENTRIES = [
+    ("game", "▶ 开始游戏：回声病房（可玩原型 · 灰盒 + 护士 AI + 音频）",
+     "echo_ward_game.py", "可体验（建议戴耳机）"),
     ("exp01", "第一人称控制 + 手电筒 + 碰撞",
-     "tech_experiments/exp01_fps_flashlight.py", "可体验"),
+     "tech_experiments/exp01_fps_flashlight.py", "技术验证"),
     ("exp02", "3D 定位音频（声音先于视觉）",
-     "tech_experiments/exp02_audio_3d.py", "可体验（建议戴耳机）"),
+     "tech_experiments/exp02_audio_3d.py", "技术验证（建议戴耳机）"),
     ("exp03", "存档 / 读档原型",
-     "tech_experiments/exp03_save_load.py", "可体验"),
+     "tech_experiments/exp03_save_load.py", "技术验证"),
+    ("audio", "重新生成全部音频资源（音乐/环境/音效）",
+     "assets_gen/make_audio.py", "工具"),
 ]
 
 
