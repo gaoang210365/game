@@ -204,6 +204,60 @@ def make_ambient_ward(path, seconds=12.0):
     _write_wav(path, np.stack([mono, right], axis=1), channels=2)
 
 
+def make_horror_drone(path, seconds=30.0):
+    """恐怖氛围床：深沉不谐和低频嗡鸣 + 缓慢逼近的音团 + 偶发金属尖啸/远处哀鸣。
+    设计成常驻循环、音量偏大，替代原本过于安静的探索背景。"""
+    n = int(SR * seconds)
+    t = _t(seconds)
+    rng = np.random.default_rng(66)
+
+    # 1) 双层 sub 低频，微失谐产生缓慢拍频（不安感）
+    sub = (0.45 * np.sin(2 * math.pi * 42.0 * t)
+           + 0.38 * np.sin(2 * math.pi * 43.7 * t)
+           + 0.30 * np.sin(2 * math.pi * 28.0 * t))
+    sub *= (0.7 + 0.3 * np.sin(2 * math.pi * 0.04 * t))
+
+    # 2) 中频不谐和音团（小二度堆叠），极慢起伏，像逼近的存在
+    cluster = (0.16 * np.sin(2 * math.pi * 196 * t)
+               + 0.14 * np.sin(2 * math.pi * 208 * t)
+               + 0.12 * np.sin(2 * math.pi * 233 * t))
+    swell = 0.5 + 0.5 * np.sin(2 * math.pi * 0.03 * t - math.pi / 2)
+    cluster *= swell
+
+    # 3) 通风/风噪铺底
+    wind = _lowpass(rng.standard_normal(n), 400) * 0.22
+
+    # 4) 偶发金属尖啸（高频下扫）与远处哀鸣
+    stabs = np.zeros(n)
+    ts = 2.0
+    while ts < seconds - 2:
+        idx = int(ts * SR)
+        dl = int(rng.uniform(0.6, 1.4) * SR)
+        dl = min(dl, n - idx)
+        env = np.exp(-np.linspace(0, 5, dl))
+        f0 = rng.uniform(900, 1600)
+        f = f0 * np.exp(-np.linspace(0, 1.2, dl))  # 下扫尖啸
+        stabs[idx:idx + dl] += 0.18 * np.sin(2 * math.pi * f * np.linspace(0, dl / SR, dl)) * env
+        ts += rng.uniform(4.0, 8.0)
+
+    # 5) 远处人声哀鸣（带失真的低频共振团）
+    moan = np.zeros(n)
+    for mt in (7.0, 19.0):
+        idx = int(mt * SR)
+        dl = min(int(2.5 * SR), n - idx)
+        mtt = np.linspace(0, 2.5, dl)
+        base = 130 + 12 * np.sin(2 * math.pi * 0.8 * mtt)
+        seg = np.sin(2 * math.pi * base * mtt) + 0.5 * np.sin(2 * math.pi * base * 2 * mtt)
+        seg = np.tanh(seg * 1.6) * np.exp(-((mtt - 1.25) ** 2) / 0.7) * 0.22
+        moan[idx:idx + dl] += seg
+
+    mono = sub + cluster + wind + stabs + moan
+    mono = _fade(mono, 1.5)
+    mono = _norm(mono, 0.95)   # 偏大音量
+    right = np.roll(mono, int(SR * 0.012)) * 0.97
+    _write_wav(path, np.stack([mono, right], axis=1), channels=2)
+
+
 def make_ambient_basement(path, seconds=12.0):
     """地下底噪：更深的 sub 低频 + 滴水 + 管道回声。"""
     n = int(SR * seconds)
@@ -374,6 +428,7 @@ JOBS = [
     ("ending.wav", MUSIC_DIR, make_ending),
     ("ambient_ward.wav", SOUNDS_DIR, make_ambient_ward),
     ("ambient_basement.wav", SOUNDS_DIR, make_ambient_basement),
+    ("horror_drone.wav", MUSIC_DIR, make_horror_drone),
     ("nurse_iv_clink.wav", SOUNDS_DIR, make_nurse_iv_clink),
     ("nurse_drag.wav", SOUNDS_DIR, make_nurse_drag),
     ("nurse_breath.wav", SOUNDS_DIR, make_nurse_breath),

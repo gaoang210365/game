@@ -4,8 +4,16 @@
 > 最近更新：见文件末尾"进度时间线"。
 
 ## 一句话现状
-恐怖游戏《回声病房》正在开发中。核心可玩原型已存在于 `echo_ward_game.py`，
-当前正在执行"全修三件事"：A 音乐、C 建模、B 手电筒。
+恐怖游戏《回声病房》已从"追逐"改为【解谜逃脱】。整层大地图 + 解谜链 + 幽灵护士（非致死）
++ 黑暗手电 + 恐怖氛围音全部完成并离屏自测通过。核心在 `echo_ward_game.py` + `level_data.py`。
+
+## 关键数据与生成流程（重要）
+- `level_data.py` = 关卡单一数据源：WALLS 墙段 / ROOMS 房间 / PROPS 道具 / INTERACTIVES 交互点。
+  游戏与 Blender 都 import 它，保证可见几何与碰撞永远对齐。改布局只改这一个文件。
+- `tools/gen_level.py` 读 level_data，用 Blender 生成 `assets/models/level.glb`（整层：地/顶/墙/
+  踢脚 + 床/推床/桌椅/货架/储物柜/水槽/配电箱）。命令见下方"运行方式"。
+- `assets_gen/make_audio.py` 的 make_horror_drone 生成 `assets/music/horror_drone.wav`（恐怖床）。
+- 解谜链密码 = 4726（note_ward_a 给 47 / note_office 给 26）。
 
 ## 环境与路径（重要，勿改）
 - 项目本地路径：`C:\Users\21036\game`

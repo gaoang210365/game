@@ -1,27 +1,25 @@
 ﻿"""
-回声病房 / Echo Ward - 可玩原型（灰盒 + 核心循环）
+回声病房 / Echo Ward - 解谜逃脱（非追逐）
 
-这是把阶段1 技术验证整合成的第一个"能玩"的版本：
-  - 第一人称移动 + 碰撞 + 手电筒
-  - 灰盒住院部走廊（401~409 房间概念）
-  - 拾取证据、单槽自动存档 / 读档
-  - 值夜护士 AI 状态机（巡逻 / 察觉 / 追逐 / 搜索 / 返回）
-  - 3D 定位音频 + 环境底噪 + 动态混音（接近减底噪、追逐上音乐）
-  - 躲藏点、防火门循环触发、心跳/脚步反馈
-  - 胜利（集齐证据从防火门离开）/ 失败（被护士抓到）结算
+废弃住院部整层，黑暗中靠手电探索、解谜逃脱：
+  - 第一人称移动 + 碰撞 + 手电筒（黑暗为主，手电是主要光源）
+  - 整层大地图（level.glb）：中央走廊 + 8 个房间（病房/护士站/储藏室/
+    办公室/检查室/配电房），几何读共享数据 level_data.py，与碰撞严格对齐
+  - 解谜链：找两张纸条拼出储物柜密码 -> 键盘输入开柜取钥匙卡 ->
+    配电房用钥匙卡恢复供电 -> 北端安全门解锁 -> 离开
+  - 幽灵护士：沿走廊游荡的氛围惊吓，靠近增压迫感但【不致死】
+  - 3D 定位音频 + 恐怖氛围床（horror_drone，音量偏大）+ 动态混音
 
-依赖资源：assets/music/ 与 assets/sounds/（若缺失，先运行 assets_gen/make_audio.py）
+依赖资源：assets/music/ 与 assets/sounds/（缺失先跑 assets_gen/make_audio.py）
+          assets/models/level.glb（缺失先跑 blender --python tools/gen_level.py）
 
 运行（用游戏专用虚拟环境）：
     game_env\Scripts\python.exe echo_ward_game.py
-或经统一入口：
-    game_env\Scripts\python.exe main.py --run game
 
 操作：
-    左键点击窗口开始
-    WASD/方向键 移动 | 鼠标 视角 | Shift 奔跑
-    F 手电筒 | E 交互（拾取/开防火门）| C 蹲下躲藏
-    F5 存档 | F9 读档 | Esc 释放鼠标 / 退出
+    调整好窗口后左键点击进入视角
+    WASD/方向键 移动 | 鼠标 视角 | Shift 奔跑 | C 蹲下
+    F 手电筒 | E 交互 | 数字键 输入密码 | F5 存档 | F9 读档 | Esc 取消/释放/退出
 """
 
 from panda3d.core import loadPrcFileData
@@ -51,6 +49,8 @@ import os
 import json
 import time
 import math
+
+import level_data as L
 
 globalClock = ClockObject.getGlobalClock()
 
@@ -139,10 +139,6 @@ SAVE_DIR = os.path.join(ROOT, "saves")
 SAVE_FILE = os.path.join(SAVE_DIR, "autosave.json")
 SAVE_VERSION = 2
 
-# 需要集齐的证据
-EVIDENCE_IDS = ["chart_404", "tape_zhou", "keycard", "photo"]
-
-
 def _sfx_path(name):
     return Filename.fromOsSpecific(os.path.join(SOUNDS_DIR, name)).getFullpath()
 
@@ -191,112 +187,6 @@ class SaveManager:
         return os.path.exists(self.save_file)
 
 
-class NurseAI:
-    """值夜护士 AI 状态机。
-
-    状态：PATROL 巡逻 / SUSPICIOUS 察觉 / CHASE 追逐 / SEARCH 搜索 / RETURN 返回
-    感知：视线（前方锥形 + 距离 + 手电照射加成）与噪声（玩家奔跑/开门产生）。
-    公平性：追逐速度略低于玩家奔跑，靠走位可摆脱；玩家蹲下躲藏降低被发现概率。
-    """
-
-    PATROL, SUSPICIOUS, CHASE, SEARCH, RETURN = range(5)
-    STATE_CN = {0: "巡逻", 1: "察觉", 2: "追逐", 3: "搜索", 4: "返回"}
-
-    def __init__(self, node, waypoints, speed_walk=2.6, speed_chase=6.2):
-        self.node = node
-        self.waypoints = waypoints
-        self.wp_index = 0
-        self.speed_walk = speed_walk
-        self.speed_chase = speed_chase
-        self.state = self.PATROL
-        self.awareness = 0.0        # 0~1 察觉度
-        self.last_known = None       # 最后已知玩家位置
-        self.search_timer = 0.0
-        self.memory = 0.0            # 循环记忆（跨循环累积，提升灵敏度，有上限）
-        self.caught = False
-
-    def sight_check(self, player_pos, facing_deg, flashlight_on, crouching):
-        """返回本帧是否"看见"玩家，以及到玩家的距离。"""
-        to_p = player_pos - self.node.getPos()
-        dist = to_p.length()
-        view_range = 16.0 if flashlight_on else 11.0
-        if dist > view_range:
-            return False, dist
-        # 视线锥：护士朝向与"指向玩家"的夹角
-        ang = math.degrees(math.atan2(to_p.x, to_p.y))
-        diff = abs((ang - facing_deg + 180) % 360 - 180)
-        fov = 55.0
-        seen = diff < fov
-        if crouching and dist > 4.0:
-            seen = seen and (diff < fov * 0.5)  # 蹲下更难被余光发现
-        return seen, dist
-
-    def update(self, dt, player_pos, facing_deg, flashlight_on, crouching, noise):
-        node_pos = self.node.getPos()
-        seen, dist = self.sight_check(player_pos, facing_deg, flashlight_on, crouching)
-
-        # 噪声：玩家奔跑/开门抬高察觉度（距离越近越强）
-        if noise > 0 and dist < 14.0:
-            self.awareness = min(1.0, self.awareness + noise * (1.0 - dist / 14.0) * dt * 2.0)
-
-        # 记忆加成：多次循环后护士更敏锐（有上限，保证后期可通过）
-        mem_bonus = 1.0 + min(self.memory, 0.6)
-
-        if seen:
-            self.awareness = min(1.0, self.awareness + dt * 1.6 * mem_bonus)
-            self.last_known = Point3(player_pos)
-        else:
-            self.awareness = max(0.0, self.awareness - dt * 0.35)
-
-        # 状态迁移
-        if self.state == self.CHASE:
-            if not seen and self.awareness < 0.45:
-                self.state = self.SEARCH
-                self.search_timer = 6.0
-        elif self.awareness >= 0.85:
-            self.state = self.CHASE
-        elif self.awareness >= 0.4:
-            self.state = self.SUSPICIOUS
-        elif self.state in (self.SUSPICIOUS,):
-            self.state = self.PATROL
-
-        # 行为
-        if self.state == self.CHASE and self.last_known is not None:
-            self._move_toward(self.last_known, self.speed_chase, dt)
-            if dist < 1.3:
-                self.caught = True
-        elif self.state == self.SUSPICIOUS and self.last_known is not None:
-            self._move_toward(self.last_known, self.speed_walk * 1.3, dt)
-        elif self.state == self.SEARCH:
-            self.search_timer -= dt
-            if self.last_known is not None:
-                self._move_toward(self.last_known, self.speed_walk, dt)
-            if self.search_timer <= 0:
-                self.state = self.RETURN
-        else:  # PATROL / RETURN
-            self._patrol(dt)
-        return self.caught
-
-    def _patrol(self, dt):
-        if not self.waypoints:
-            return
-        target = Point3(*self.waypoints[self.wp_index], 0.9)
-        if self._move_toward(target, self.speed_walk, dt) < 0.5:
-            self.wp_index = (self.wp_index + 1) % len(self.waypoints)
-            if self.state == self.RETURN:
-                self.state = self.PATROL
-
-    def _move_toward(self, target, speed, dt):
-        pos = self.node.getPos()
-        to_t = Point3(target.x, target.y, pos.z) - pos
-        d = to_t.length()
-        if d > 1e-4:
-            step = min(speed * dt, d)
-            self.node.setPos(pos + to_t / d * step)
-            self.node.setH(math.degrees(math.atan2(-to_t.x, to_t.y)))
-        return d
-
-
 class EchoWardGame(ShowBase):
     """回声病房可玩原型主程序。"""
 
@@ -314,19 +204,40 @@ class EchoWardGame(ShowBase):
         self.pitch = 0.0
         self.mouse_captured = False
 
-        # 游戏状态
-        self.loop_layer = 0
-        self.collected = set()
+        # 移动/相机
+        self.walk_speed = 4.0
+        self.run_speed = 6.8
+        self.crouch_speed = 2.0
+        self.mouse_sensitivity = 0.12
+        self.heading = 0.0
+        self.pitch = 0.0
+        self.mouse_captured = False
         self.crouching = False
-        self.flashlight_on = True
         self.stamina = 1.0
+
+        # 手电
+        self.flashlight_on = True
+
+        # ---- 解谜状态（非追逐逃脱）----
+        # 密码 4726：note_ward_a 给前两位、note_office 给后两位
+        self.secret_code = "4726"
+        self.notes_found = set()       # {"note_ward_a","note_office"}
+        self.keypad_input = ""          # 键盘输入缓冲
+        self.keypad_active = False      # 是否正在输入密码
+        self.locker_open = False        # 储物柜是否已开
+        self.has_keycard = False        # 是否拿到钥匙卡
+        self.power_on = False           # 配电房是否已恢复供电
+        self.exit_unlocked = False      # 安全门是否已解锁
+
+        # 结算
         self.stress = 0.0
         self.game_over = False
         # 注意：胜利标志必须叫 victory，绝不能用 self.win —— 那是 ShowBase 的图形窗口对象，
         # 覆盖它会让所有鼠标/窗口操作（句柄、隐藏光标、recenter）全部静默失效。
         self.victory = False
-        self.message = "把窗口切到前台（点一下或 Alt+Tab）即自动进入视角。找齐 4 份证据，从走廊尽头防火门离开。"
-        self.msg_timer = 6.0
+        self.message = ("废弃住院部。找线索拼出储物柜密码，取钥匙卡恢复供电，"
+                        "从北端安全门离开。手电筒 F 键。")
+        self.msg_timer = 8.0
         self.noise_this_frame = 0.0
 
         self.save_mgr = SaveManager()
@@ -361,118 +272,85 @@ class EchoWardGame(ShowBase):
         self.level = NodePath("level")
         self.level.reparentTo(self.render)
 
-        # 贴图（保留供回退灰盒/门使用）
+        # 贴图（回退灰盒用）
         self.tex_floor = self._load_tex("floor_tile.png")
         self.tex_wall = self._load_tex("wall.png")
         self.tex_ceiling = self._load_tex("ceiling.png")
-        self.tex_door = self._load_tex("door.png")
-        self.tex_metal = self._load_tex("metal.png")
 
-        # 走廊墙体规格：(中心, 尺寸)。既用于碰撞，也与 hospital_room.glb 几何严格对齐。
-        self.walls = []
-        wall_specs = [
-            (Point3(-5, 22, 0), Vec3(1, 48, 3)),   # 左长墙
-            (Point3(5, 22, 0), Vec3(1, 48, 3)),    # 右长墙
-            (Point3(0, -2, 0), Vec3(12, 1, 3)),    # 起点后墙
-            # 病房隔断（左右交错，形成 401~409 门洞概念）
-            (Point3(-3, 6, 0), Vec3(4, 1, 3)),
-            (Point3(3, 12, 0), Vec3(4, 1, 3)),
-            (Point3(-3, 18, 0), Vec3(4, 1, 3)),
-            (Point3(3, 24, 0), Vec3(4, 1, 3)),
-            (Point3(-3, 30, 0), Vec3(4, 1, 3)),
-            (Point3(3, 36, 0), Vec3(4, 1, 3)),
-        ]
-        for pos, scale in wall_specs:
-            self.walls.append((pos, scale))
+        # 墙体碰撞规格：从共享数据 level_data.WALLS 读取（中心x,中心y,长x,长y）。
+        # 与 level.glb 的可见墙体是同一份数据，天然对齐。
+        self.walls = list(L.WALLS)
 
-        # 加载 Blender 生成的医院走廊 GLB（地/顶/墙/踢脚/病床/输液架）。
-        # GLB 已按游戏世界坐标系生成，挂到 render 原点即与碰撞盒重合，无需缩放旋转。
-        room_path = os.path.join(ROOT, "assets", "models", "hospital_room.glb")
+        # 加载整层 GLB（地/顶/墙/踢脚 + 病床/桌椅/货架/储物柜等道具）
+        level_path = os.path.join(ROOT, "assets", "models", "level.glb")
         self.room_model = None
-        if os.path.exists(room_path):
+        if os.path.exists(level_path):
             self.room_model = self.loader.loadModel(
-                Filename.fromOsSpecific(room_path).getFullpath())
+                Filename.fromOsSpecific(level_path).getFullpath())
         if self.room_model:
             self.room_model.reparentTo(self.level)
         else:
-            # 回退：程序化灰盒（GLB 缺失时仍可玩）
-            self._build_graybox_fallback(wall_specs)
+            self._build_graybox_fallback()
 
-        # 证据点（黄色方块，可拾取）
-        self.collectibles = {}
-        ev_specs = {
-            "chart_404": Point3(-3, 8, 0.6),
-            "tape_zhou": Point3(3, 14, 0.6),
-            "keycard": Point3(-3, 28, 0.6),
-            "photo": Point3(3, 34, 0.6),
-        }
-        for cid, pos in ev_specs.items():
-            node = self.loader.loadModel("models/box")
-            node.setScale(0.35)
-            node.setColor(0.95, 0.82, 0.2, 1)
-            node.setPos(pos)
-            node.reparentTo(self.render)
-            self.collectibles[cid] = node
+        self.exit_pos = Point3(*L.EXIT_POS)
+        self._build_interactives()
 
-        # 躲藏点（蓝色低矮方块，蹲下靠近可降低被发现）
-        self.hiding_spots = [Point3(-3.5, 20, 0.4), Point3(3.5, 26, 0.4)]
-        for hp in self.hiding_spots:
-            h = self.loader.loadModel("models/box")
-            h.setScale(1.0, 1.0, 0.8)
-            h.setColor(0.2, 0.35, 0.5, 1)
-            h.setPos(hp - Point3(0.5, 0.5, 0))
-            h.reparentTo(self.level)
+    def _build_interactives(self):
+        """解谜物件：线索纸条、密码键盘、储物柜、配电箱、安全门。
+        用带自发光的小模型标记，便于在黑暗中被手电照到时注意。"""
+        self.interactive_nodes = {}
 
-        # 防火门（终点，红绿指示）
-        self.exit_pos = Point3(0, 42, 0)
+        def marker(cid, pos, color, scale=(0.3, 0.3, 0.4)):
+            n = self.loader.loadModel("models/box")
+            n.setScale(*scale)
+            n.setColor(*color, 1)
+            n.setColorScale(1.4, 1.4, 1.4, 1)
+            n.setPos(Point3(pos[0], pos[1], pos[2]))
+            n.reparentTo(self.render)
+            self.interactive_nodes[cid] = n
+            return n
+
+        I = L.INTERACTIVES
+        # 线索纸条（暖白，贴墙）
+        marker("note_ward_a", I["note_ward_a"], (0.95, 0.92, 0.7), (0.02, 0.3, 0.4))
+        marker("note_office", I["note_office"], (0.95, 0.92, 0.7), (0.02, 0.3, 0.4))
+        # 密码键盘（青，贴储物柜）
+        marker("keypad_storage", I["keypad_storage"], (0.3, 0.8, 0.85), (0.05, 0.25, 0.35))
+        # 钥匙卡（藏在储物柜里，开锁后显示）
+        kc = marker("locker_key", I["locker_key"], (0.9, 0.8, 0.2), (0.2, 0.02, 0.14))
+        kc.hide()
+        # 配电箱总闸（橙）
+        marker("fusebox", I["fusebox"], (0.9, 0.55, 0.15), (0.1, 0.5, 0.6))
+
+        # 安全门（终点，通电后变绿可开）
         self.exit_door = self.loader.loadModel("models/box")
-        self.exit_door.setScale(3, 0.4, 2.6)
-        self.exit_door.setPos(self.exit_pos - Point3(1.5, 0.2, 0))
-        if self.tex_door:
-            self.exit_door.setTexture(self.tex_door)
-        self.exit_door.setColorScale(1.2, 0.5, 0.5, 1)
+        self.exit_door.setScale(1.6, 0.3, 2.4)
+        self.exit_door.setPos(self.exit_pos + Point3(0, 0, 1.2))
+        self.exit_door.setColorScale(1.2, 0.4, 0.4, 1)
         self.exit_door.reparentTo(self.level)
-        # 门上的绿色出口灯（集齐证据后点亮）
         self.exit_light = PointLight("exit_light")
-        self.exit_light.setColor(Vec4(0.1, 0.5, 0.15, 1))
+        self.exit_light.setColor(Vec4(0.1, 0.55, 0.15, 1))
         self.exit_light_np = self.render.attachNewNode(self.exit_light)
-        self.exit_light_np.setPos(0, 41, 2.5)
+        self.exit_light_np.setPos(self.exit_pos.x, self.exit_pos.y - 1, 2.6)
 
-    def _build_graybox_fallback(self, wall_specs):
-        """GLB 缺失时的程序化灰盒场景（地/顶/墙），保证游戏仍可运行。"""
+    def _build_graybox_fallback(self):
+        """GLB 缺失时的程序化灰盒（地/顶/墙），保证仍可玩。"""
+        fw = L.FLOOR_X1 - L.FLOOR_X0
+        fl = L.FLOOR_Y1 - L.FLOOR_Y0
+        cx = (L.FLOOR_X0 + L.FLOOR_X1) / 2
+        cy = (L.FLOOR_Y0 + L.FLOOR_Y1) / 2
         cm = CardMaker("floor")
-        cm.setFrame(-6, 6, -2, 46)
-        cm.setUvRange((0, 0), (6, 24))
+        cm.setFrame(-fw / 2, fw / 2, -fl / 2, fl / 2)
         floor = self.render.attachNewNode(cm.generate())
         floor.setP(-90)
-        if self.tex_floor:
-            floor.setTexture(self.tex_floor)
-        else:
-            floor.setColor(0.16, 0.17, 0.18, 1)
+        floor.setPos(cx, cy, 0)
+        floor.setColor(0.16, 0.17, 0.18, 1)
         floor.reparentTo(self.level)
-
-        cmc = CardMaker("ceil")
-        cmc.setFrame(-6, 6, -2, 46)
-        cmc.setUvRange((0, 0), (6, 24))
-        ceil = self.render.attachNewNode(cmc.generate())
-        ceil.setP(90)
-        ceil.setZ(3.0)
-        if self.tex_ceiling:
-            ceil.setTexture(self.tex_ceiling)
-        else:
-            ceil.setColor(0.08, 0.08, 0.10, 1)
-        ceil.reparentTo(self.level)
-
-        for pos, scale in wall_specs:
+        for mx, my, lx, ly in self.walls:
             w = self.loader.loadModel("models/box")
-            w.setScale(scale)
-            w.setPos(pos - Point3(scale.x * 0.5, scale.y * 0.5, 0))
-            if self.tex_wall:
-                w.setTexture(self.tex_wall)
-                w.setTexScale(TextureStage.getDefault(),
-                              max(1, scale.x), max(1, scale.z))
-            else:
-                w.setColor(0.22, 0.2, 0.2, 1)
+            w.setScale(max(lx, 0.1), max(ly, 0.1), L.WALL_H)
+            w.setPos(mx - max(lx, 0.1) / 2, my - max(ly, 0.1) / 2, 0)
+            w.setColor(0.22, 0.2, 0.2, 1)
             w.reparentTo(self.level)
 
     # ---------- 碰撞 ----------
@@ -481,7 +359,7 @@ class EchoWardGame(ShowBase):
         self.cTrav = CollisionTraverser("traverser")
         self.pusher = CollisionHandlerPusher()
         self.player = self.render.attachNewNode("player")
-        self.player.setPos(0, 1, 1.6)
+        self.player.setPos(*L.SPAWN)
 
         col = CollisionNode("player_col")
         col.addSolid(CollisionSphere(0, 0, 0, 0.5))
@@ -491,65 +369,73 @@ class EchoWardGame(ShowBase):
         self.pusher.addCollider(self.player_col, self.player)
         self.cTrav.addCollider(self.player_col, self.pusher)
 
-        for pos, scale in self.walls:
+        # 墙段：level_data (中心x, 中心y, 长x, 长y)，底在 z=0、高 WALL_H
+        for mx, my, lx, ly in self.walls:
             cn = CollisionNode("wall_col")
             cn.addSolid(CollisionBox(Point3(0, 0, 0),
-                                     scale.x * 0.5, scale.y * 0.5, scale.z * 0.5))
+                                     max(lx, 0.05) * 0.5, max(ly, 0.05) * 0.5,
+                                     L.WALL_H * 0.5))
             cn.setIntoCollideMask(BitMask32.bit(0))
             c = self.render.attachNewNode(cn)
-            c.setPos(pos.x, pos.y, scale.z * 0.5)
+            c.setPos(mx, my, L.WALL_H * 0.5)
 
     # ---------- 灯光 ----------
 
     def _setup_lighting(self):
         self.render.setShaderAuto()
 
-        # 提高环境光：昏暗但可辨认路径（不再纯黑）
-        amb = AmbientLight("amb")
-        amb.setColor(Vec4(0.28, 0.30, 0.36, 1))
-        self.render.setLight(self.render.attachNewNode(amb))
+        # 环境光压到极低：几乎全黑，手电成为主要光源（修"开关手电没区别"）。
+        # 断电时用这个暗环境；恢复供电后 _restore_power 会提亮并点亮日光灯。
+        self.amb = AmbientLight("amb")
+        self.amb_dark = Vec4(0.04, 0.045, 0.06, 1)   # 断电（极暗）
+        self.amb_lit = Vec4(0.16, 0.17, 0.20, 1)     # 通电（仍偏暗但可辨）
+        self.amb.setColor(self.amb_dark)
+        self.render.setLight(self.render.attachNewNode(self.amb))
 
-        # 冷月光方向光，给墙面一点立体感
+        # 微弱冷色方向光，仅给墙面一点轮廓，不足以照亮空间
         dl = DirectionalLight("moon")
-        dl.setColor(Vec4(0.22, 0.24, 0.32, 1))
+        dl.setColor(Vec4(0.06, 0.07, 0.10, 1))
         np_dl = self.render.attachNewNode(dl)
         np_dl.setHpr(30, -60, 0)
         self.render.setLight(np_dl)
 
-        # 沿走廊的日光灯（点光源），带闪烁
+        # 日光灯（沿中央走廊 + 各房间），断电时全灭；通电后点亮并闪烁
         self.fluorescents = []
-        for y in (6, 14, 22, 30, 38):
-            pl = PointLight(f"fluoro_{y}")
-            pl.setColor(Vec4(0.55, 0.58, 0.60, 1))
-            pl.setAttenuation(Vec3(1.0, 0.02, 0.010))
+        light_spots = [(0, y, 2.9) for y in range(2, 54, 8)]        # 走廊
+        light_spots += [(-8, 8, 2.9), (-8, 30, 2.9), (8, 6, 2.9),
+                        (8, 33, 2.9), (8, 46, 2.9)]                  # 房间
+        for i, (lx, ly, lz) in enumerate(light_spots):
+            pl = PointLight(f"fluoro_{i}")
+            pl.setColor(Vec4(0.0, 0.0, 0.0, 1))   # 初始灭（断电）
+            pl.setAttenuation(Vec3(1.0, 0.04, 0.015))
             np_pl = self.render.attachNewNode(pl)
-            np_pl.setPos(0, y, 2.8)
+            np_pl.setPos(lx, ly, lz)
             self.render.setLight(np_pl)
-            # 灯管本体（自发光小方块）
             tube = self.loader.loadModel("models/box")
-            tube.setScale(1.4, 0.25, 0.08)
-            tube.setPos(-0.7, y, 2.92)
+            tube.setScale(1.4, 0.22, 0.06)
+            tube.setPos(lx - 0.7, ly, lz + 0.15)
             tube.setColor(0.9, 0.95, 1.0, 1)
-            tube.setColorScale(1.8, 1.9, 2.0, 1)
+            tube.setColorScale(0.2, 0.2, 0.25, 1)  # 初始暗
             tube.setLightOff()
             tube.reparentTo(self.level)
             self.fluorescents.append({"light": pl, "tube": tube,
-                                      "base": 0.58, "phase": y * 1.3})
+                                      "base": 0.55, "phase": i * 1.3})
 
-        # 体积雾：营造纵深与压迫感，同时柔化远处
+        # 体积雾：纵深与压迫感
         fog = Fog("hospital_fog")
-        fog.setColor(0.05, 0.06, 0.08)
-        fog.setExpDensity(0.035)
+        fog.setColor(0.02, 0.025, 0.035)
+        fog.setExpDensity(0.05)
         self.render.setFog(fog)
         self.fog = fog
 
     def _setup_flashlight(self):
+        # 更亮更聚焦的手电，断电全黑环境下对比强烈
         spot = Spotlight("flashlight")
         lens = PerspectiveLens()
-        lens.setFov(50)
+        lens.setFov(42)
         spot.setLens(lens)
-        spot.setColor(Vec4(1.6, 1.5, 1.35, 1))
-        spot.setAttenuation(Vec3(1.0, 0.0, 0.004))
+        spot.setColor(Vec4(2.6, 2.5, 2.2, 1))
+        spot.setAttenuation(Vec3(1.0, 0.0, 0.0022))
         self.flashlight_np = self.camera.attachNewNode(spot)
         self.flashlight_np.setPos(0.2, 0, -0.1)
         self.render.setLight(self.flashlight_np)
@@ -693,9 +579,11 @@ class EchoWardGame(ShowBase):
     # ---------- 护士 ----------
 
     def _setup_nurse(self):
+        """幽灵护士：非致死氛围惊吓。沿走廊游荡，靠近时环境更压抑、
+        灯光更不稳、心跳加剧，但不会抓杀玩家（本作是解谜逃脱，不是追逐）。"""
         self.nurse_node = NodePath("nurse")
         self.nurse_node.reparentTo(self.render)
-        self.nurse_node.setPos(0, 40, 0.0)  # 模型脚在 z≈0
+        self.nurse_node.setPos(0, 46, 0.0)
 
         model_path = os.path.join(ROOT, "assets", "models", "nurse.glb")
         model = None
@@ -704,9 +592,8 @@ class EchoWardGame(ShowBase):
                 Filename.fromOsSpecific(model_path).getFullpath())
         if model:
             model.reparentTo(self.nurse_node)
-            model.setColorScale(1.15, 1.15, 1.2, 1)  # 略微苍白发亮
+            model.setColorScale(1.2, 1.2, 1.3, 1)
         else:
-            # 回退：盒子拼人形
             body = self.loader.loadModel("models/box")
             body.setScale(0.5, 0.5, 1.4)
             body.setPos(-0.25, -0.25, 0.3)
@@ -718,8 +605,11 @@ class EchoWardGame(ShowBase):
             head.setColor(0.9, 0.88, 0.85, 1)
             head.reparentTo(self.nurse_node)
         self.nurse_model = model
-        waypoints = [(-3, 10), (3, 16), (-3, 26), (3, 32), (0, 38)]
-        self.nurse = NurseAI(self.nurse_node, waypoints)
+        # 沿中央走廊南北游荡的巡逻点（非追逐）
+        self.nurse_waypoints = [(0, 8), (0, 20), (0, 34), (0, 48), (0, 34), (0, 20)]
+        self.nurse_wp = 0
+        self.nurse_speed = 1.8
+        self.nurse_dist = 999.0
 
     # ---------- 音频 ----------
 
@@ -757,31 +647,22 @@ class EchoWardGame(ShowBase):
         self.sfx_stinger = self._load_sfx("stinger.wav", vol=0.7)
         self.sfx_save = self._load_sfx("save_blip.wav", vol=0.5)
 
-        # 环境底噪（循环）
-        self.ambience = self._load_sfx("ambient_ward.wav", loop=True, vol=0.55)
+        # 环境底噪（循环，低音量铺底）
+        self.ambience = self._load_sfx("ambient_ward.wav", loop=True, vol=0.35)
         if self.ambience:
             self.ambience.play()
         if self.sfx_heartbeat:
             self.sfx_heartbeat.play()
 
-        # 音乐：探索背景乐（循环，常驻低音量，营造氛围）
-        self.music_explore = None
-        explore_path = os.path.join(MUSIC_DIR, "menu_theme.wav")
-        if os.path.exists(explore_path):
-            self.music_explore = self.loader.loadSfx(_music_path("menu_theme.wav"))
-            self.music_explore.setLoop(True)
-            self.music_explore_base_vol = 0.30
-            self.music_explore.setVolume(self.music_explore_base_vol)
-            self.music_explore.play()
-
-        # 音乐：追逐（循环，默认静音，进入追逐淡入）
-        self.music_chase = None
-        chase_path = os.path.join(MUSIC_DIR, "chase.wav")
-        if os.path.exists(chase_path):
-            self.music_chase = self.loader.loadSfx(_music_path("chase.wav"))
-            self.music_chase.setLoop(True)
-            self.music_chase.setVolume(0.0)
-            self.music_chase.play()
+        # 恐怖氛围床（常驻循环，音量偏大，替代原本过于安静的探索乐）
+        self.music_horror = None
+        horror_path = os.path.join(MUSIC_DIR, "horror_drone.wav")
+        if os.path.exists(horror_path):
+            self.music_horror = self.loader.loadSfx(_music_path("horror_drone.wav"))
+            self.music_horror.setLoop(True)
+            self.music_horror_base_vol = 0.85
+            self.music_horror.setVolume(self.music_horror_base_vol)
+            self.music_horror.play()
 
         self._footstep_timer = 0.0
 
@@ -902,9 +783,19 @@ class EchoWardGame(ShowBase):
         self.accept("f9", self._do_load)
         self.accept("r", self._restart)
         self.accept("f3", self._toggle_debug)
+        # 密码键盘输入：主键盘数字 + 小键盘数字
+        for d in "0123456789":
+            self.accept(d, self._keypad_digit, [d])
+            self.accept(d + "-repeat", self._keypad_digit, [d])
+        self.accept("backspace", self._keypad_backspace)
+        self.accept("enter", self._on_enter)
         # 兜底：任何时候按空格都强制重新抢焦点并捕获鼠标
         self.accept("space", self._grab_focus_and_capture_now)
         self.show_debug = False
+
+    def _on_enter(self):
+        if self.keypad_active:
+            self._submit_keypad()
 
     def _toggle_debug(self):
         self.show_debug = not self.show_debug
@@ -922,6 +813,11 @@ class EchoWardGame(ShowBase):
         self._capture_mouse()
 
     def _on_escape(self):
+        if self.keypad_active:
+            self.keypad_active = False
+            self.keypad_input = ""
+            self._set_message("已取消密码输入。")
+            return
         if self.mouse_captured:
             self._release_mouse()
         else:
@@ -948,60 +844,148 @@ class EchoWardGame(ShowBase):
         self.message = text
         self.msg_timer = dur
 
-    def _interact(self):
-        if self.game_over:
-            return
+    def _nearest_interactive(self, max_d=2.6):
         ppos = self.player.getPos()
-        # 先尝试拾取证据
-        best, best_d = None, 2.2
-        for cid, node in self.collectibles.items():
-            if cid in self.collected:
-                continue
-            d = (node.getPos() - ppos).length()
+        best, best_d = None, max_d
+        for cid, pos in L.INTERACTIVES.items():
+            d = (Point3(pos[0], pos[1], pos[2]) - ppos).length()
             if d <= best_d:
                 best, best_d = cid, d
-        if best is not None:
-            self.collected.add(best)
-            self.collectibles[best].hide()
+        return best
+
+    def _interact(self):
+        """E 键交互：解谜链 = 读两张纸条得密码 -> 键盘输入 -> 开储物柜取钥匙卡
+        -> 配电房用钥匙卡恢复供电 -> 北端安全门离开。"""
+        if self.game_over:
+            return
+        # 若正在键盘输入界面，E 视作"提交密码"
+        if self.keypad_active:
+            self._submit_keypad()
+            return
+
+        cid = self._nearest_interactive()
+        if cid is None:
+            self._set_message("附近没有可交互的东西。")
+            return
+
+        if cid in ("note_ward_a", "note_office"):
+            self.notes_found.add(cid)
             if self.sfx_pickup:
                 self.sfx_pickup.play()
-            self._set_message(f"拾取证据：{best}（{len(self.collected)}/{len(EVIDENCE_IDS)}）")
-            self._do_save()  # 自动存档
+            if cid == "note_ward_a":
+                self._set_message("病历残页：「储物柜密码前两位 47……后两位问办公室。」", 6)
+            else:
+                self._set_message("便签：「……密码后两位 26。合起来才开得了柜子。」", 6)
+            self.interactive_nodes[cid].setColorScale(0.5, 0.5, 0.5, 1)
+            self._do_save()
             return
-        # 再尝试防火门
-        if (self.exit_pos - ppos).length() < 3.0:
-            if len(self.collected) >= len(EVIDENCE_IDS):
+
+        # 键盘与储物柜/钥匙卡在同一位置：未开→输密码；已开且卡未取→取卡
+        if cid in ("keypad_storage", "locker_key"):
+            if not self.locker_open:
+                self.keypad_active = True
+                self.keypad_input = ""
+                self._set_message("密码键盘：输入 4 位数字，Enter/E 确认，退格删除，Esc 取消。", 6)
+            elif not self.has_keycard:
+                self.has_keycard = True
+                self.interactive_nodes["locker_key"].hide()
+                if self.sfx_pickup:
+                    self.sfx_pickup.play()
+                self._set_message("拿到【员工钥匙卡】。去配电房（西北）恢复供电。", 6)
+                self._do_save()
+            else:
+                self._set_message("储物柜已经空了。")
+            return
+
+        if cid == "fusebox":
+            if self.power_on:
+                self._set_message("电力已恢复。前往北端安全门离开。")
+            elif self.has_keycard:
+                self._restore_power()
+            else:
+                self._set_message("配电箱需要员工钥匙卡才能打开总闸。")
+            return
+
+        if cid == "exit_door":
+            if self.exit_unlocked:
                 if self.sfx_door:
                     self.sfx_door.play()
                 self.victory = True
                 self.game_over = True
-                self._set_message("你推开防火门……时间再次倒退。【逃离结局】按 R 重玩", 999)
+                self._set_message("你刷卡推开安全门，逃出了回声病房。【逃离结局】按 R 重玩", 999)
             else:
-                miss = len(EVIDENCE_IDS) - len(self.collected)
-                self._set_message(f"防火门锁着。还需 {miss} 份证据。")
+                self._set_message("安全门是电控锁，断电时打不开。先恢复供电。")
             return
-        self._set_message("附近没有可交互的东西。")
+
+    def _submit_keypad(self):
+        if self.keypad_input == self.secret_code:
+            self.keypad_active = False
+            self.locker_open = True
+            if self.sfx_door:
+                self.sfx_door.play()
+            self.interactive_nodes["locker_key"].show()
+            self._set_message("咔哒——储物柜开了。里面有一张钥匙卡。", 6)
+            self._do_save()
+        else:
+            hint = ""
+            if len(self.notes_found) < 2:
+                hint = "（线索不全：病房和办公室各有一张纸条）"
+            self._set_message(f"密码错误。{hint}", 5)
+            self.keypad_input = ""
+
+    def _keypad_digit(self, d):
+        if self.keypad_active and len(self.keypad_input) < 4:
+            self.keypad_input += d
+
+    def _keypad_backspace(self):
+        if self.keypad_active:
+            self.keypad_input = self.keypad_input[:-1]
+
+    def _restore_power(self):
+        self.power_on = True
+        self.exit_unlocked = True
+        self.render.setColor(self.amb_lit) if False else None
+        self.amb.setColor(self.amb_lit)
+        self.exit_door.setColorScale(0.4, 1.3, 0.5, 1)
+        self.render.setLight(self.exit_light_np)
+        if self.sfx_door:
+            self.sfx_door.play()
+        self._set_message("总闸合上，灯光复明。北端安全门已解锁——快离开。", 7)
+        self._do_save()
 
     def _collect_state(self):
         pos = self.player.getPos()
         return {
             "player_pos": [round(pos.x, 3), round(pos.y, 3), round(pos.z, 3)],
             "player_heading": round(self.heading, 3),
-            "loop_layer": self.loop_layer,
-            "collected": sorted(self.collected),
-            "nurse_memory": round(self.nurse.memory, 3),
+            "notes_found": sorted(self.notes_found),
+            "locker_open": self.locker_open,
+            "has_keycard": self.has_keycard,
+            "power_on": self.power_on,
+            "exit_unlocked": self.exit_unlocked,
         }
 
     def _apply_state(self, state):
-        px, py, pz = state.get("player_pos", [0, 1, 1.6])
+        px, py, pz = state.get("player_pos", list(L.SPAWN))
         self.player.setPos(px, py, pz)
         self.heading = float(state.get("player_heading", 0.0))
         self.player.setH(self.heading)
-        self.loop_layer = int(state.get("loop_layer", 0))
-        self.collected = set(state.get("collected", []))
-        self.nurse.memory = float(state.get("nurse_memory", 0.0))
-        for cid, node in self.collectibles.items():
-            node.hide() if cid in self.collected else node.show()
+        self.notes_found = set(state.get("notes_found", []))
+        self.locker_open = bool(state.get("locker_open", False))
+        self.has_keycard = bool(state.get("has_keycard", False))
+        self.power_on = bool(state.get("power_on", False))
+        self.exit_unlocked = bool(state.get("exit_unlocked", False))
+        for cid in ("note_ward_a", "note_office"):
+            if cid in self.notes_found and cid in self.interactive_nodes:
+                self.interactive_nodes[cid].setColorScale(0.5, 0.5, 0.5, 1)
+        if self.locker_open and not self.has_keycard:
+            self.interactive_nodes["locker_key"].show()
+        elif self.has_keycard:
+            self.interactive_nodes["locker_key"].hide()
+        if self.power_on:
+            self.amb.setColor(self.amb_lit)
+            self.exit_door.setColorScale(0.4, 1.3, 0.5, 1)
+            self.render.setLight(self.exit_light_np)
 
     def _do_save(self):
         ok = self.save_mgr.save(self._collect_state())
@@ -1019,22 +1003,28 @@ class EchoWardGame(ShowBase):
     def _restart(self):
         if not self.game_over:
             return
-        # 循环推进：护士记忆累积（有上限），场景重置
-        self.loop_layer += 1
-        self.nurse.memory = min(self.nurse.memory + 0.2, 0.6)
-        self.collected.clear()
-        for node in self.collectibles.values():
-            node.show()
-        self.player.setPos(0, 1, 1.6)
+        self.notes_found.clear()
+        self.keypad_active = False
+        self.keypad_input = ""
+        self.locker_open = False
+        self.has_keycard = False
+        self.power_on = False
+        self.exit_unlocked = False
+        self.amb.setColor(self.amb_dark)
+        self.render.clearLight(self.exit_light_np)
+        self.exit_door.setColorScale(1.2, 0.4, 0.4, 1)
+        for cid in ("note_ward_a", "note_office", "keypad_storage", "fusebox"):
+            if cid in self.interactive_nodes:
+                self.interactive_nodes[cid].setColorScale(1.4, 1.4, 1.4, 1)
+        self.interactive_nodes["locker_key"].hide()
+        self.player.setPos(*L.SPAWN)
         self.heading = 0.0
-        self.nurse_node.setPos(0, 40, 0.0)
-        self.nurse.state = NurseAI.PATROL
-        self.nurse.awareness = 0.0
-        self.nurse.caught = False
+        self.nurse_node.setPos(0, 46, 0.0)
+        self.nurse_wp = 0
         self.game_over = False
         self.victory = False
         self.stress = 0.0
-        self._set_message(f"循环层 {self.loop_layer}：护士似乎更警觉了……")
+        self._set_message("重新开始。找线索、拼密码、恢复供电、逃离。")
 
     # ---------- HUD ----------
 
@@ -1100,16 +1090,29 @@ class EchoWardGame(ShowBase):
                              "WASD 移动 | 鼠标 视角 | F 手电 | E 交互 | C 蹲下 | F5/F9 存读档")
         else:
             fl = "开" if self.flashlight_on else "关"
-            st = NurseAI.STATE_CN[self.nurse.state]
-            crouch = " [蹲]" if self.crouching else ""
+            # 解谜进度目标
+            if not self.locker_open:
+                obj = "目标：找线索拼出储物柜密码"
+            elif not self.has_keycard:
+                obj = "目标：从储物柜取钥匙卡"
+            elif not self.power_on:
+                obj = "目标：去配电房（西北）恢复供电"
+            elif not self.game_over:
+                obj = "目标：从北端安全门离开"
+            else:
+                obj = ""
+            power = "供电" if self.power_on else "断电"
+            card = " | 钥匙卡✓" if self.has_keycard else ""
             self.hud.setText(
-                f"循环层 {self.loop_layer} | 证据 {len(self.collected)}/{len(EVIDENCE_IDS)} | 手电:{fl}{crouch}\n"
-                f"护士状态：{st} | 察觉度：{self.nurse.awareness:.0%}\n"
-                f"体力：{self.stamina:.0%}"
+                f"手电:{fl} | 电力:{power}{card} | 线索 {len(self.notes_found)}/2\n"
+                f"{obj}"
             )
         if not self.mouse_captured and not self.game_over:
             tip = "调整好窗口后，点击画面开始" if not self._entered else "点击画面继续"
             self.msg.setText(f"{tip}   (Click to play)")
+        elif self.keypad_active:
+            shown = self.keypad_input + "_" * (4 - len(self.keypad_input))
+            self.msg.setText(f"密码键盘： [ {shown} ]   数字键输入 · Enter/E 确认 · Esc 取消")
         else:
             self.msg.setText(self.message if self.msg_timer > 0 or self.game_over else "")
 
@@ -1235,49 +1238,36 @@ class EchoWardGame(ShowBase):
             else:
                 self.stamina = min(1.0, self.stamina + dt * 0.16)
 
-        # 护士 AI
+        # 幽灵护士：沿走廊游荡（非致死）。靠近只增压迫感，不抓杀。
         if not self.game_over:
-            caught = self.nurse.update(dt, self.player.getPos(), self.nurse_node.getH(),
-                                       self.flashlight_on, self.crouching,
-                                       self.noise_this_frame)
-            if caught:
-                self.game_over = True
-                self.victory = False
-                if self.sfx_stinger:
-                    self.sfx_stinger.play()
-                self._set_message("值夜护士抓住了你……【失败】按 R 重新循环", 999)
+            self._update_nurse(dt)
 
-        # 压力 = 察觉度 + 距离贴近
-        dist = (self.nurse_node.getPos() - self.player.getPos()).length()
-        target_stress = max(self.nurse.awareness, max(0.0, 1.0 - dist / 12.0))
+        # 压力：护士越近越紧张（用于混音/灯光）
+        self.nurse_dist = (self.nurse_node.getPos() - self.player.getPos()).length()
+        target_stress = max(0.0, 1.0 - self.nurse_dist / 14.0)
         self.stress += (target_stress - self.stress) * min(1.0, dt * 3.0)
 
-        # 动态混音：接近/追逐减底噪、上心跳、追逐上音乐
+        # 动态混音：护士接近时底噪下压、心跳上、恐怖床更响
         if self.ambience:
-            self.ambience.setVolume(0.55 * (1.0 - 0.6 * self.stress))
+            self.ambience.setVolume(0.35 * (1.0 - 0.5 * self.stress))
         if self.sfx_heartbeat:
-            self.sfx_heartbeat.setVolume(min(0.8, self.stress * 0.9) if self.stress > 0.25 else 0.0)
-        if self.music_chase:
-            target = 0.55 if self.nurse.state == NurseAI.CHASE else 0.0
-            cur = self.music_chase.getVolume()
-            self.music_chase.setVolume(cur + (target - cur) * min(1.0, dt * 2.0))
+            self.sfx_heartbeat.setVolume(min(0.85, self.stress * 0.95) if self.stress > 0.2 else 0.0)
+        if self.music_horror:
+            self.music_horror.setVolume(min(1.0, self.music_horror_base_vol + 0.15 * self.stress))
 
-        # 日光灯闪烁（护士接近/追逐时更不稳定，恐怖增强）
+        # 日光灯：断电全灭；通电后点亮并闪烁（护士接近更不稳）
         t_now = globalClock.getFrameTime()
-        instability = 0.15 + 0.5 * self.stress
+        instability = 0.12 + 0.55 * self.stress
         for fl in self.fluorescents:
+            if not self.power_on:
+                fl["light"].setColor(Vec4(0, 0, 0, 1))
+                fl["tube"].setColorScale(0.15, 0.15, 0.2, 1)
+                continue
             flick = 0.5 + 0.5 * math.sin(t_now * 6.0 + fl["phase"])
             spike = 1.0 if (math.sin(t_now * 23.0 + fl["phase"]) > (0.9 - instability)) else 0.0
-            level = fl["base"] * (0.75 + 0.25 * flick) * (0.35 if spike else 1.0)
+            level = fl["base"] * (0.75 + 0.25 * flick) * (0.3 if spike else 1.0)
             fl["light"].setColor(Vec4(level, level * 1.03, level * 1.06, 1))
             fl["tube"].setColorScale(level * 3, level * 3.1, level * 3.3, 1)
-
-        # 防火门指示：集齐证据变绿
-        if len(self.collected) >= len(EVIDENCE_IDS):
-            self.exit_door.setColorScale(0.4, 1.3, 0.5, 1)
-            if not getattr(self, "_exit_lit", False):
-                self.render.setLight(self.exit_light_np)
-                self._exit_lit = True
 
         if hasattr(self, "audio3d"):
             self.audio3d.update()
@@ -1285,6 +1275,21 @@ class EchoWardGame(ShowBase):
             self.msg_timer -= dt
         self._refresh_hud()
         return task.cont
+
+    def _update_nurse(self, dt):
+        """护士沿 waypoints 缓慢游荡；到点切下一点。纯氛围，无追逐/致死。"""
+        if not self.nurse_waypoints:
+            return
+        tx, ty = self.nurse_waypoints[self.nurse_wp]
+        pos = self.nurse_node.getPos()
+        to = Point3(tx, ty, pos.z) - pos
+        d = to.length()
+        if d < 0.6:
+            self.nurse_wp = (self.nurse_wp + 1) % len(self.nurse_waypoints)
+        elif d > 1e-4:
+            step = min(self.nurse_speed * dt, d)
+            self.nurse_node.setPos(pos + to / d * step)
+            self.nurse_node.setH(math.degrees(math.atan2(-to.x, to.y)))
 
 
 if __name__ == "__main__":
