@@ -247,7 +247,6 @@ class EchoWardGame(ShowBase):
         self._setup_lighting()
         self._setup_flashlight()
         self._setup_camera()
-        self._setup_nurse()
         self._setup_audio()
         self._setup_input()
         self._setup_hud()
@@ -294,6 +293,7 @@ class EchoWardGame(ShowBase):
 
         self.exit_pos = Point3(*L.EXIT_POS)
         self._build_interactives()
+        self._build_knockables()
 
     def _build_interactives(self):
         """解谜物件：线索纸条、密码键盘、储物柜、配电箱、安全门。
@@ -332,6 +332,89 @@ class EchoWardGame(ShowBase):
         self.exit_light.setColor(Vec4(0.1, 0.55, 0.15, 1))
         self.exit_light_np = self.render.attachNewNode(self.exit_light)
         self.exit_light_np.setPos(self.exit_pos.x, self.exit_pos.y - 1, 2.6)
+
+    def _build_knockables(self):
+        """可碰倒的小道具：身体走过去接触即被推倒/推开。
+        用简单小圆柱/方块占位，避免与 GLB 里的静态装饰重复太多。
+        每个 = {node, home(初始pos), toppled(是否已倒)}。"""
+        self.knockables = []
+        # (类型, x, y, 颜色) —— 放在房间/走廊里可被撞到的小物件
+        specs = [
+            ("stool", -6, 4, (0.6, 0.5, 0.35)),
+            ("stool", 6, 4, (0.6, 0.5, 0.35)),
+            ("bin", -3, 12, (0.3, 0.4, 0.45)),
+            ("bin", 3, 20, (0.3, 0.4, 0.45)),
+            ("ivstand", -9, 16, (0.7, 0.72, 0.74)),
+            ("ivstand", 9, 10, (0.7, 0.72, 0.74)),
+            ("bin", -3, 44, (0.3, 0.4, 0.45)),
+            ("stool", 4, 50, (0.6, 0.5, 0.35)),
+            ("cart", 0, 28, (0.55, 0.57, 0.6)),
+        ]
+        for kind, x, y, col in specs:
+            node = NodePath("knock_%s_%d_%d" % (kind, x, y))
+            node.reparentTo(self.render)
+            node.setPos(x, y, 0)
+            if kind == "ivstand":
+                pole = self.loader.loadModel("models/box")
+                pole.setScale(0.06, 0.06, 1.6)
+                pole.setPos(-0.03, -0.03, 0)
+                pole.setColor(*col, 1)
+                pole.reparentTo(node)
+            elif kind == "cart":
+                body = self.loader.loadModel("models/box")
+                body.setScale(0.6, 0.4, 0.8)
+                body.setPos(-0.3, -0.2, 0)
+                body.setColor(*col, 1)
+                body.reparentTo(node)
+            elif kind == "bin":
+                body = self.loader.loadModel("models/box")
+                body.setScale(0.35, 0.35, 0.6)
+                body.setPos(-0.175, -0.175, 0)
+                body.setColor(*col, 1)
+                body.reparentTo(node)
+            else:  # stool
+                body = self.loader.loadModel("models/box")
+                body.setScale(0.35, 0.35, 0.45)
+                body.setPos(-0.175, -0.175, 0)
+                body.setColor(*col, 1)
+                body.reparentTo(node)
+            self.knockables.append({"node": node, "home": Point3(x, y, 0),
+                                    "toppled": False, "vel": Vec3(0, 0, 0)})
+
+    def _update_knockables(self, dt):
+        """玩家接触则推倒并给一个远离玩家的速度；已倒的继续滑行减速。"""
+        if not hasattr(self, "knockables"):
+            return
+        ppos = self.player.getPos()
+        for k in self.knockables:
+            node = k["node"]
+            npos = node.getPos()
+            flat = Vec3(npos.x - ppos.x, npos.y - ppos.y, 0)
+            dist = flat.length()
+            if not k["toppled"] and dist < 0.9:
+                # 被撞倒：倒向远离玩家方向，并获得初速度
+                k["toppled"] = True
+                if dist > 1e-3:
+                    flat.normalize()
+                else:
+                    flat = Vec3(0, 1, 0)
+                node.setHpr(0, 0, 88)  # 放倒
+                node.setZ(0.25)
+                k["vel"] = flat * 2.2
+            if k["toppled"]:
+                v = k["vel"]
+                if v.lengthSquared() > 1e-4:
+                    node.setPos(npos + v * dt)
+                    k["vel"] = v * max(0.0, 1.0 - dt * 3.0)
+
+    def _reset_knockables(self):
+        if not hasattr(self, "knockables"):
+            return
+        for k in self.knockables:
+            k["toppled"] = False
+            k["vel"] = Vec3(0, 0, 0)
+            k["node"].setHpr(0, 0, 0)
+            k["node"].setPos(k["home"])
 
     def _build_graybox_fallback(self):
         """GLB 缺失时的程序化灰盒（地/顶/墙），保证仍可玩。"""
@@ -576,41 +659,6 @@ class EchoWardGame(ShowBase):
         except Exception as e:
             print("disable IME failed (non-fatal):", e)
 
-    # ---------- 护士 ----------
-
-    def _setup_nurse(self):
-        """幽灵护士：非致死氛围惊吓。沿走廊游荡，靠近时环境更压抑、
-        灯光更不稳、心跳加剧，但不会抓杀玩家（本作是解谜逃脱，不是追逐）。"""
-        self.nurse_node = NodePath("nurse")
-        self.nurse_node.reparentTo(self.render)
-        self.nurse_node.setPos(0, 46, 0.0)
-
-        model_path = os.path.join(ROOT, "assets", "models", "nurse.glb")
-        model = None
-        if os.path.exists(model_path):
-            model = self.loader.loadModel(
-                Filename.fromOsSpecific(model_path).getFullpath())
-        if model:
-            model.reparentTo(self.nurse_node)
-            model.setColorScale(1.2, 1.2, 1.3, 1)
-        else:
-            body = self.loader.loadModel("models/box")
-            body.setScale(0.5, 0.5, 1.4)
-            body.setPos(-0.25, -0.25, 0.3)
-            body.setColor(0.82, 0.83, 0.86, 1)
-            body.reparentTo(self.nurse_node)
-            head = self.loader.loadModel("models/box")
-            head.setScale(0.32, 0.32, 0.32)
-            head.setPos(-0.16, -0.16, 1.75)
-            head.setColor(0.9, 0.88, 0.85, 1)
-            head.reparentTo(self.nurse_node)
-        self.nurse_model = model
-        # 沿中央走廊南北游荡的巡逻点（非追逐）
-        self.nurse_waypoints = [(0, 8), (0, 20), (0, 34), (0, 48), (0, 34), (0, 20)]
-        self.nurse_wp = 0
-        self.nurse_speed = 1.8
-        self.nurse_dist = 999.0
-
     # ---------- 音频 ----------
 
     def _load_sfx(self, name, loop=False, vol=1.0):
@@ -628,15 +676,7 @@ class EchoWardGame(ShowBase):
         self.audio3d = Audio3DManager(self.sfxManagerList[0], self.camera)
         self.audio3d.setDistanceFactor(1.0)
         self.audio3d.setDropOffFactor(1.2)
-        self.nurse_clink = None
-        clink_path = os.path.join(SOUNDS_DIR, "nurse_iv_clink.wav")
-        if os.path.exists(clink_path):
-            self.nurse_clink = self.audio3d.loadSfx(_sfx_path("nurse_iv_clink.wav"))
-            self.audio3d.attachSoundToObject(self.nurse_clink, self.nurse_node)
-            self.audio3d.attachListener(self.camera)
-            self.nurse_clink.setLoop(True)
-            self.nurse_clink.setVolume(0.9)
-            self.nurse_clink.play()
+        self.audio3d.attachListener(self.camera)
 
         # 2D 音效
         self.sfx_footstep = self._load_sfx("footstep.wav", vol=0.5)
@@ -1019,8 +1059,7 @@ class EchoWardGame(ShowBase):
         self.interactive_nodes["locker_key"].hide()
         self.player.setPos(*L.SPAWN)
         self.heading = 0.0
-        self.nurse_node.setPos(0, 46, 0.0)
-        self.nurse_wp = 0
+        self._reset_knockables()
         self.game_over = False
         self.victory = False
         self.stress = 0.0
@@ -1238,26 +1277,21 @@ class EchoWardGame(ShowBase):
             else:
                 self.stamina = min(1.0, self.stamina + dt * 0.16)
 
-        # 幽灵护士：沿走廊游荡（非致死）。靠近只增压迫感，不抓杀。
-        if not self.game_over:
-            self._update_nurse(dt)
+        # 压力氛围：断电时持续压抑，通电后缓解（不再依赖护士）
+        target_stress = 0.7 if not self.power_on else 0.15
+        self.stress += (target_stress - self.stress) * min(1.0, dt * 1.5)
 
-        # 压力：护士越近越紧张（用于混音/灯光）
-        self.nurse_dist = (self.nurse_node.getPos() - self.player.getPos()).length()
-        target_stress = max(0.0, 1.0 - self.nurse_dist / 14.0)
-        self.stress += (target_stress - self.stress) * min(1.0, dt * 3.0)
-
-        # 动态混音：护士接近时底噪下压、心跳上、恐怖床更响
+        # 动态混音：断电越久越压抑，恐怖床常驻偏大
         if self.ambience:
-            self.ambience.setVolume(0.35 * (1.0 - 0.5 * self.stress))
+            self.ambience.setVolume(0.35 * (1.0 - 0.4 * self.stress))
         if self.sfx_heartbeat:
-            self.sfx_heartbeat.setVolume(min(0.85, self.stress * 0.95) if self.stress > 0.2 else 0.0)
+            self.sfx_heartbeat.setVolume(min(0.7, self.stress * 0.8) if self.stress > 0.3 else 0.0)
         if self.music_horror:
-            self.music_horror.setVolume(min(1.0, self.music_horror_base_vol + 0.15 * self.stress))
+            self.music_horror.setVolume(min(1.0, self.music_horror_base_vol + 0.1 * self.stress))
 
-        # 日光灯：断电全灭；通电后点亮并闪烁（护士接近更不稳）
+        # 日光灯：断电全灭；通电后点亮并闪烁
         t_now = globalClock.getFrameTime()
-        instability = 0.12 + 0.55 * self.stress
+        instability = 0.12 + 0.4 * self.stress
         for fl in self.fluorescents:
             if not self.power_on:
                 fl["light"].setColor(Vec4(0, 0, 0, 1))
@@ -1269,27 +1303,15 @@ class EchoWardGame(ShowBase):
             fl["light"].setColor(Vec4(level, level * 1.03, level * 1.06, 1))
             fl["tube"].setColorScale(level * 3, level * 3.1, level * 3.3, 1)
 
+        # 可碰倒道具：身体接触则推倒
+        self._update_knockables(dt)
+
         if hasattr(self, "audio3d"):
             self.audio3d.update()
         if self.msg_timer > 0:
             self.msg_timer -= dt
         self._refresh_hud()
         return task.cont
-
-    def _update_nurse(self, dt):
-        """护士沿 waypoints 缓慢游荡；到点切下一点。纯氛围，无追逐/致死。"""
-        if not self.nurse_waypoints:
-            return
-        tx, ty = self.nurse_waypoints[self.nurse_wp]
-        pos = self.nurse_node.getPos()
-        to = Point3(tx, ty, pos.z) - pos
-        d = to.length()
-        if d < 0.6:
-            self.nurse_wp = (self.nurse_wp + 1) % len(self.nurse_waypoints)
-        elif d > 1e-4:
-            step = min(self.nurse_speed * dt, d)
-            self.nurse_node.setPos(pos + to / d * step)
-            self.nurse_node.setH(math.degrees(math.atan2(-to.x, to.y)))
 
 
 if __name__ == "__main__":
