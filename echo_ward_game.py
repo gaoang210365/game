@@ -54,6 +54,83 @@ import math
 
 globalClock = ClockObject.getGlobalClock()
 
+
+def _disable_ime_process():
+    """进程级禁用 IME —— 根治"按 Shift 切中/英文导致 WASD 被输入法吃掉、按键失效"。
+
+    ImmAssociateContext(hwnd,0) 只解除某个窗口的 IME 上下文，挡不住输入法软件的
+    全局 Shift 热键；一旦切到中文组字，按键事件被输入法拦截，Panda 收不到，
+    is_button_down 恒为 False。ImmDisableIME((DWORD)-1) 禁用当前进程所有线程的
+    IME，必须在创建窗口前调用。之后即便系统显示切成中文，游戏也不进入组字，
+    硬件按键照常到达。
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        # -1 (0xFFFFFFFF) = 当前进程所有线程
+        ctypes.windll.imm32.ImmDisableIME(0xFFFFFFFF)
+    except Exception as e:
+        print("ImmDisableIME failed (non-fatal):", e)
+
+
+_disable_ime_process()
+
+
+_WIN32_READY = False
+
+
+def _setup_win32_signatures():
+    """给 user32 函数声明 64 位指针签名 —— 根治 HWND 被 ctypes 截断成 32 位的问题。
+
+    64 位 Windows 上 HWND 是 64 位指针，ctypes 默认按 32 位 int 处理返回值/参数，
+    导致 GetForegroundWindow 截断后与完整 hwnd 永不相等（前台恒判 False）、
+    GetAncestor 传入被截断返回垃圾句柄（GetWindowRect 失败、窗口中心=None）。
+    显式声明后这些调用才正确，焦点判断与 recenter 才能工作。
+    windll.user32 是单例，配置一次全局生效（_force_foreground 也一并受益）。
+    """
+    global _WIN32_READY
+    if _WIN32_READY or sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u = ctypes.windll.user32
+        u.GetForegroundWindow.restype = wintypes.HWND
+        u.GetActiveWindow.restype = wintypes.HWND
+        u.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        u.GetAncestor.restype = wintypes.HWND
+        u.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        u.GetWindowRect.restype = wintypes.BOOL
+        u.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        u.GetClientRect.restype = wintypes.BOOL
+        u.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+        u.ClientToScreen.restype = wintypes.BOOL
+        u.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+        u.GetCursorPos.restype = wintypes.BOOL
+        u.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+        u.SetCursorPos.restype = wintypes.BOOL
+        u.SetForegroundWindow.argtypes = [wintypes.HWND]
+        u.SetForegroundWindow.restype = wintypes.BOOL
+        u.BringWindowToTop.argtypes = [wintypes.HWND]
+        u.BringWindowToTop.restype = wintypes.BOOL
+        u.SetActiveWindow.argtypes = [wintypes.HWND]
+        u.SetActiveWindow.restype = wintypes.HWND
+        u.SetFocus.argtypes = [wintypes.HWND]
+        u.SetFocus.restype = wintypes.HWND
+        u.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        u.ShowWindow.restype = wintypes.BOOL
+        u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.c_void_p]
+        u.GetWindowThreadProcessId.restype = wintypes.DWORD
+        u.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+        u.AttachThreadInput.restype = wintypes.BOOL
+        _WIN32_READY = True
+    except Exception as e:
+        print("win32 signature setup failed (non-fatal):", e)
+
+
+_setup_win32_signatures()
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SOUNDS_DIR = os.path.join(ROOT, "assets", "sounds")
 MUSIC_DIR = os.path.join(ROOT, "assets", "music")
@@ -245,8 +322,10 @@ class EchoWardGame(ShowBase):
         self.stamina = 1.0
         self.stress = 0.0
         self.game_over = False
-        self.win = False
-        self.message = "【先用鼠标左键点一下窗口】点击后即可用鼠标转视角。找齐 4 份证据，从走廊尽头防火门离开。"
+        # 注意：胜利标志必须叫 victory，绝不能用 self.win —— 那是 ShowBase 的图形窗口对象，
+        # 覆盖它会让所有鼠标/窗口操作（句柄、隐藏光标、recenter）全部静默失效。
+        self.victory = False
+        self.message = "把窗口切到前台（点一下或 Alt+Tab）即自动进入视角。找齐 4 份证据，从走廊尽头防火门离开。"
         self.msg_timer = 6.0
         self.noise_this_frame = 0.0
 
@@ -481,11 +560,13 @@ class EchoWardGame(ShowBase):
         self.camLens.setFov(75)
         self.camLens.setNear(0.1)
         self._last_mouse = None
+        # 是否已"首次点击进入"。启动时不自动捕获鼠标——留时间给玩家最大化/全屏/
+        # 拖动窗口；等玩家第一次点击窗口再隐藏光标进入视角，之后焦点检测才接管。
+        self._entered = False
         self._disable_ime()
-        # 抢占前台焦点，并在启动后自动进入视角控制（不再依赖点击）
         self._release_mouse()
-        # 窗口就绪后：抢焦点 + 关输入法 + 捕获鼠标（延迟确保 hwnd 有效）
-        self.taskMgr.doMethodLater(0.25, self._grab_focus_and_capture, "grab_focus")
+        # 持续检测前台焦点：仅在已首次点击进入后，才自动捕获/释放（每 0.2s 一次）
+        self.taskMgr.doMethodLater(0.2, self._auto_focus_capture, "auto_focus")
 
     def _grab_focus_and_capture(self, task):
         self._force_foreground()
@@ -493,6 +574,49 @@ class EchoWardGame(ShowBase):
         if not self.mouse_captured and not self.game_over:
             self._capture_mouse()
         return task.done
+
+    def _get_root_hwnd(self):
+        """Panda 的 getWindowHandle 给的是内层渲染窗口，前台窗口是其顶层父窗口。
+        用 GetAncestor(GA_ROOT) 取真正的顶层句柄，否则前台焦点判断恒为误判 False。"""
+        hwnd = self._get_hwnd()
+        if not hwnd or sys.platform != "win32":
+            return hwnd
+        try:
+            import ctypes
+            GA_ROOT = 2
+            root = ctypes.windll.user32.GetAncestor(hwnd, GA_ROOT)
+            return root or hwnd
+        except Exception:
+            return hwnd
+
+    def _is_foreground(self):
+        """本游戏窗口是否为当前前台窗口（有键鼠焦点）。
+        同时比对顶层与内层句柄，规避 Panda 句柄层级导致的误判。"""
+        if sys.platform != "win32":
+            return True
+        hwnd = self._get_hwnd()
+        root = self._get_root_hwnd()
+        if not hwnd:
+            return True
+        try:
+            import ctypes
+            fg = ctypes.windll.user32.GetForegroundWindow()
+            return fg == hwnd or fg == root
+        except Exception:
+            return True
+
+    def _auto_focus_capture(self, task):
+        """焦点检测：仅在玩家已"首次点击进入"后才生效。
+        窗口在前台且未捕获→隐藏光标进入视角；焦点切走→释放光标。
+        启动阶段（未点击进入前）完全不动光标，方便最大化/全屏/拖窗口。"""
+        if self.game_over or not self._entered:
+            return task.again
+        fg = self._is_foreground()
+        if fg and not self.mouse_captured:
+            self._capture_mouse()
+        elif not fg and self.mouse_captured:
+            self._release_mouse()
+        return task.again
 
     def _get_hwnd(self):
         try:
@@ -663,17 +787,80 @@ class EchoWardGame(ShowBase):
 
     # ---------- 鼠标 / 输入 ----------
 
+    def _win_center_screen(self):
+        """返回游戏窗口客户区中心的【屏幕坐标】(sx, sy)，供 SetCursorPos 用。"""
+        if sys.platform != "win32":
+            return None
+        root = self._get_root_hwnd()
+        if not root:
+            return None
+        try:
+            import ctypes
+            from ctypes import wintypes
+            u = ctypes.windll.user32
+            rect = wintypes.RECT()
+            # 用窗口整体矩形取中心（够用且稳，不依赖客户区换算）
+            if not u.GetWindowRect(root, ctypes.byref(rect)):
+                return None
+            cx = (rect.left + rect.right) // 2
+            cy = (rect.top + rect.bottom) // 2
+            return cx, cy
+        except Exception:
+            return None
+
+    def _win_get_cursor(self):
+        if sys.platform != "win32":
+            return None
+        try:
+            import ctypes
+            from ctypes import wintypes
+            pt = wintypes.POINT()
+            if ctypes.windll.user32.GetCursorPos(ctypes.byref(pt)):
+                return pt.x, pt.y
+        except Exception:
+            pass
+        return None
+
+    def _win_set_cursor(self, sx, sy):
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            ctypes.windll.user32.SetCursorPos(int(sx), int(sy))
+        except Exception:
+            pass
+
+    def _win_show_cursor(self, show):
+        """Win32 ShowCursor 是计数器：反复调直到降到目标可见性。"""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            u = ctypes.windll.user32
+            # 返回值是调用后的显示计数；<0 表示已隐藏
+            for _ in range(8):
+                cnt = u.ShowCursor(bool(show))
+                if show and cnt >= 0:
+                    break
+                if (not show) and cnt < 0:
+                    break
+        except Exception:
+            pass
+
     def _capture_mouse(self):
-        """进入视角控制：隐藏光标 + 绝对模式，每帧读指针位置算相对中心的位移，
-        再把指针拉回中心（recenter 方案）。这是 Panda3D 上最稳的第一人称做法，
-        不依赖 M_relative 的平台差异。"""
-        self._force_foreground()
+        """进入视角控制——纯 Win32 方案（不依赖 Panda 的 requestProperties/movePointer，
+        那套在本机不生效：光标不隐藏、也读不到位移）。
+        隐藏光标用 ShowCursor(FALSE)；转向在 _update 里用 GetCursorPos 相对屏幕中心
+        算位移，再 SetCursorPos 拉回中心。"""
+        # Panda 侧也请求隐藏（双保险，无害）
         if hasattr(self.win, "requestProperties"):
             props = WindowProperties()
             props.setCursorHidden(True)
             props.setMouseMode(WindowProperties.M_absolute)
             self.win.requestProperties(props)
+        self._win_show_cursor(False)
         self.mouse_captured = True
+        self._win_primed = False   # 首帧仅归位、不产生位移，避免开局猛甩
         self._center_mouse()
 
     def _release_mouse(self):
@@ -682,9 +869,15 @@ class EchoWardGame(ShowBase):
             props.setCursorHidden(False)
             props.setMouseMode(WindowProperties.M_absolute)
             self.win.requestProperties(props)
+        self._win_show_cursor(True)
         self.mouse_captured = False
 
     def _center_mouse(self):
+        """把光标放到窗口中心（优先 Win32 屏幕坐标，回退 Panda movePointer）。"""
+        c = self._win_center_screen()
+        if c:
+            self._win_set_cursor(*c)
+            return
         if (self.win is not None and hasattr(self.win, "movePointer")
                 and self.win.hasSize()):
             self.win.movePointer(0, int(self.win.getXSize() / 2),
@@ -701,7 +894,7 @@ class EchoWardGame(ShowBase):
         self.btn_left = KeyboardButton.left()
         self.btn_right = KeyboardButton.right()
         self.accept("escape", self._on_escape)
-        self.accept("mouse1", self._capture_mouse)
+        self.accept("mouse1", self._on_click_enter)
         self.accept("f", self._toggle_flashlight)
         self.accept("e", self._interact)
         self.accept("c", self._toggle_crouch)
@@ -716,7 +909,14 @@ class EchoWardGame(ShowBase):
     def _toggle_debug(self):
         self.show_debug = not self.show_debug
 
+    def _on_click_enter(self):
+        """点击窗口进入视角。首次点击标记 _entered，之后焦点检测才接管自动捕获。"""
+        self._entered = True
+        if not self.game_over:
+            self._capture_mouse()
+
     def _grab_focus_and_capture_now(self):
+        self._entered = True
         self._force_foreground()
         self._disable_ime()
         self._capture_mouse()
@@ -773,7 +973,7 @@ class EchoWardGame(ShowBase):
             if len(self.collected) >= len(EVIDENCE_IDS):
                 if self.sfx_door:
                     self.sfx_door.play()
-                self.win = True
+                self.victory = True
                 self.game_over = True
                 self._set_message("你推开防火门……时间再次倒退。【逃离结局】按 R 重玩", 999)
             else:
@@ -832,7 +1032,7 @@ class EchoWardGame(ShowBase):
         self.nurse.awareness = 0.0
         self.nurse.caught = False
         self.game_over = False
-        self.win = False
+        self.victory = False
         self.stress = 0.0
         self._set_message(f"循环层 {self.loop_layer}：护士似乎更警觉了……")
 
@@ -895,7 +1095,8 @@ class EchoWardGame(ShowBase):
         if not hasattr(self, "hud"):
             return
         if not self.mouse_captured:
-            self.hud.setText("回声病房 / Echo Ward\n【鼠标已释放 — 点击窗口重新控制视角】\n"
+            hint = "先最大化/全屏窗口，再点击画面进入视角" if not self._entered else "点击画面重新进入视角（Esc 释放光标）"
+            self.hud.setText(f"回声病房 / Echo Ward\n【{hint}；卡住按空格】\n"
                              "WASD 移动 | 鼠标 视角 | F 手电 | E 交互 | C 蹲下 | F5/F9 存读档")
         else:
             fl = "开" if self.flashlight_on else "关"
@@ -907,7 +1108,8 @@ class EchoWardGame(ShowBase):
                 f"体力：{self.stamina:.0%}"
             )
         if not self.mouse_captured and not self.game_over:
-            self.msg.setText("点击画面开始   (Click to play)")
+            tip = "调整好窗口后，点击画面开始" if not self._entered else "点击画面继续"
+            self.msg.setText(f"{tip}   (Click to play)")
         else:
             self.msg.setText(self.message if self.msg_timer > 0 or self.game_over else "")
 
@@ -925,9 +1127,13 @@ class EchoWardGame(ShowBase):
             if hasattr(self.win, "getPointer") and self.win.hasSize():
                 md = self.win.getPointer(0)
                 ptr = f"({md.getX()},{md.getY()}) inWin={md.getInWindow()}"
+            root = self._get_root_hwnd()
+            center = self._win_center_screen()
+            cur = self._win_get_cursor()
             self.dbg.setText(
-                f"[F3 诊断] hwnd={hwnd} 前台焦点={focused}\n"
+                f"[F3 诊断] hwnd={hwnd} root={root} 前台焦点={focused}\n"
                 f"鼠标捕获={self.mouse_captured} 指针={ptr}\n"
+                f"窗口中心={center} 光标={cur}\n"
                 f"heading={self.heading:.1f} pitch={self.pitch:.1f}\n"
                 f"若焦点=False：按空格抢焦点；方向键可转视角作备选"
             )
@@ -940,9 +1146,26 @@ class EchoWardGame(ShowBase):
         dt = globalClock.getDt()
         self.noise_this_frame = 0.0
 
-        # 视角（recenter 方案）：读指针相对窗口中心的偏移，应用后拉回中心
-        if (self.mouse_captured and hasattr(self.win, "getPointer")
+        # 视角：纯 Win32 recenter —— 读光标屏幕坐标相对窗口中心的偏移，应用后拉回中心
+        if self.mouse_captured and sys.platform == "win32":
+            center = self._win_center_screen()
+            cur = self._win_get_cursor()
+            if center and cur:
+                cx, cy = center
+                dx = cur[0] - cx
+                dy = cur[1] - cy
+                if not getattr(self, "_win_primed", False):
+                    self._win_primed = True  # 首帧仅归位
+                elif abs(dx) < 600 and abs(dy) < 600 and (dx or dy):
+                    self.heading -= dx * self.mouse_sensitivity
+                    self.pitch -= dy * self.mouse_sensitivity
+                    self.pitch = max(-89, min(89, self.pitch))
+                    self.player.setH(self.heading)
+                    self.camera.setP(self.pitch)
+                self._win_set_cursor(cx, cy)
+        elif (self.mouse_captured and hasattr(self.win, "getPointer")
                 and self.win.hasSize()):
+            # 非 Windows 回退：Panda movePointer recenter
             md = self.win.getPointer(0)
             cx = self.win.getXSize() // 2
             cy = self.win.getYSize() // 2
@@ -1019,7 +1242,7 @@ class EchoWardGame(ShowBase):
                                        self.noise_this_frame)
             if caught:
                 self.game_over = True
-                self.win = False
+                self.victory = False
                 if self.sfx_stinger:
                     self.sfx_stinger.play()
                 self._set_message("值夜护士抓住了你……【失败】按 R 重新循环", 999)
