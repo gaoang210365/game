@@ -106,37 +106,68 @@ WALLS = build_walls()
 
 
 # ---- 静态装饰道具（供 Blender 建模；type 决定形状）----
-# type: bed / desk / locker / chair / shelf / sink / fusebox_panel / gurney
+# type: bed / gurney / desk / chair / shelf / locker / sink / fusebox_panel
+#       ivpole / monitor / wheelchair / boxes / curtain / bedtable
 PROPS = [
-    # 病房床位
-    {"type": "bed",    "pos": (-11, 2),  "rot": 90},
-    {"type": "bed",    "pos": (-11, 7),  "rot": 90},
-    {"type": "gurney", "pos": (-6, 5),   "rot": 0},
-    {"type": "bed",    "pos": (-11, 14), "rot": 90},
-    {"type": "bed",    "pos": (-11, 20), "rot": 90},
-    {"type": "bed",    "pos": (11, 2),   "rot": 90},
-    {"type": "bed",    "pos": (11, 8),   "rot": 90},
-    {"type": "gurney", "pos": (6, 6),    "rot": 90},
-    # 护士站
-    {"type": "desk",   "pos": (-8, 30),  "rot": 0},
-    {"type": "chair",  "pos": (-8, 28.5),"rot": 0},
-    {"type": "shelf",  "pos": (-13, 26), "rot": 0},
-    {"type": "shelf",  "pos": (-13, 30), "rot": 0},
-    # 储藏室
-    {"type": "shelf",  "pos": (13, 14),  "rot": 0},
-    {"type": "shelf",  "pos": (13, 18),  "rot": 0},
-    {"type": "shelf",  "pos": (13, 22),  "rot": 0},
-    {"type": "locker", "pos": (4, 24),   "rot": 0},
-    # 办公室
-    {"type": "desk",   "pos": (8, 32),   "rot": 0},
-    {"type": "chair",  "pos": (8, 30.5), "rot": 0},
-    {"type": "shelf",  "pos": (13, 28),  "rot": 0},
-    # 检查室
-    {"type": "gurney", "pos": (8, 46),   "rot": 0},
-    {"type": "sink",   "pos": (13, 42),  "rot": 0},
-    # 配电房
-    {"type": "fusebox_panel", "pos": (-13.6, 47), "rot": 0},
-    {"type": "locker", "pos": (-4, 40),   "rot": 0},
+    # 401 病房（西南）：两张床+床头桌+隔帘+输液架+监护仪
+    {"type": "bed",      "pos": (-11, 1.5), "rot": 90},
+    {"type": "bedtable", "pos": (-11, 3.2), "rot": 0},
+    {"type": "ivpole",   "pos": (-9.4, 1),  "rot": 0},
+    {"type": "curtain",  "pos": (-8.5, 2),  "rot": 0},
+    {"type": "bed",      "pos": (-11, 7),   "rot": 90},
+    {"type": "bedtable", "pos": (-11, 8.7), "rot": 0},
+    {"type": "monitor",  "pos": (-9.4, 7),  "rot": 0},
+    {"type": "wheelchair","pos": (-4, 6.5), "rot": 200},
+    # 403 病房（西中）
+    {"type": "bed",      "pos": (-11, 13),  "rot": 90},
+    {"type": "bedtable", "pos": (-11, 14.7),"rot": 0},
+    {"type": "ivpole",   "pos": (-9.4, 13), "rot": 0},
+    {"type": "curtain",  "pos": (-8.5, 14), "rot": 0},
+    {"type": "bed",      "pos": (-11, 20),  "rot": 90},
+    {"type": "gurney",   "pos": (-5, 18),   "rot": 20},
+    {"type": "monitor",  "pos": (-9.4, 20), "rot": 0},
+    # 护士站（西中北）
+    {"type": "desk",     "pos": (-8, 30),   "rot": 0},
+    {"type": "chair",    "pos": (-8, 28.8), "rot": 180},
+    {"type": "monitor",  "pos": (-5.5, 31), "rot": 90},
+    {"type": "shelf",    "pos": (-13.3, 26.5),"rot": 90},
+    {"type": "shelf",    "pos": (-13.3, 30), "rot": 90},
+    {"type": "boxes",    "pos": (-5, 36),   "rot": 0},
+    # 配电房（西北）
+    {"type": "fusebox_panel", "pos": (-13.4, 47), "rot": 0},
+    {"type": "locker",   "pos": (-4, 40),   "rot": 180},
+    {"type": "boxes",    "pos": (-11, 52),  "rot": 30},
+    {"type": "shelf",    "pos": (-13.3, 42),"rot": 90},
+    # 402 病房（东南）
+    {"type": "bed",      "pos": (11, 1.5),  "rot": 90},
+    {"type": "bedtable", "pos": (11, 3.2),  "rot": 0},
+    {"type": "ivpole",   "pos": (9.4, 1),   "rot": 0},
+    {"type": "curtain",  "pos": (8.5, 2),   "rot": 0},
+    {"type": "bed",      "pos": (11, 8),    "rot": 90},
+    {"type": "bedtable", "pos": (11, 9.7),  "rot": 0},
+    {"type": "gurney",   "pos": (5, 6),     "rot": 90},
+    {"type": "monitor",  "pos": (9.4, 8),   "rot": 0},
+    # 储藏室（东中）
+    {"type": "shelf",    "pos": (13.3, 14), "rot": 90},
+    {"type": "shelf",    "pos": (13.3, 18), "rot": 90},
+    {"type": "shelf",    "pos": (13.3, 22), "rot": 90},
+    {"type": "locker",   "pos": (4, 24),    "rot": 180},
+    {"type": "boxes",    "pos": (10, 20),   "rot": 15},
+    {"type": "boxes",    "pos": (7, 14),    "rot": -20},
+    {"type": "wheelchair","pos": (6, 24),   "rot": 90},
+    # 医生办公室（东中北）
+    {"type": "desk",     "pos": (8, 32),    "rot": 0},
+    {"type": "chair",    "pos": (8, 30.7),  "rot": 180},
+    {"type": "shelf",    "pos": (13.3, 28), "rot": 90},
+    {"type": "shelf",    "pos": (13.3, 32), "rot": 90},
+    {"type": "boxes",    "pos": (4, 38),    "rot": 0},
+    # 检查室（东北）
+    {"type": "gurney",   "pos": (8, 46),    "rot": 0},
+    {"type": "monitor",  "pos": (10.5, 44), "rot": 0},
+    {"type": "ivpole",   "pos": (6, 44),    "rot": 0},
+    {"type": "sink",     "pos": (13.3, 42), "rot": 90},
+    {"type": "curtain",  "pos": (5, 48),    "rot": 90},
+    {"type": "wheelchair","pos": (10, 52),  "rot": 210},
 ]
 
 
