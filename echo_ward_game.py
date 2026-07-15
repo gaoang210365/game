@@ -294,6 +294,7 @@ class EchoWardGame(ShowBase):
         self.exit_pos = Point3(*L.EXIT_POS)
         self._build_interactives()
         self._build_knockables()
+        self._build_decals()
 
     def _build_interactives(self):
         """解谜物件：线索纸条、密码键盘、储物柜、配电箱、安全门。
@@ -332,6 +333,56 @@ class EchoWardGame(ShowBase):
         self.exit_light.setColor(Vec4(0.1, 0.55, 0.15, 1))
         self.exit_light_np = self.render.attachNewNode(self.exit_light)
         self.exit_light_np.setPos(self.exit_pos.x, self.exit_pos.y - 1, 2.6)
+
+    def _build_decals(self):
+        """血迹/污渍贴花：地面朝上、墙面竖直的半透明卡片，营造恐怖废弃感。
+        贴图缺失时静默跳过。"""
+        from panda3d.core import TransparencyAttrib
+
+        def load_tex(name):
+            p = os.path.join(TEX_DIR, name)
+            if not os.path.exists(p):
+                return None
+            return self.loader.loadTexture(_tex_path(name))
+
+        t_floor = load_tex("blood_splatter_decal.png")
+        t_wall = load_tex("blood_wall_decal.png")
+
+        def floor_decal(tex, x, y, size, rotd=0):
+            if not tex:
+                return
+            cm = CardMaker("blood_f")
+            cm.setFrame(-size / 2, size / 2, -size / 2, size / 2)
+            n = self.render.attachNewNode(cm.generate())
+            n.setTexture(tex)
+            n.setP(-90)
+            n.setH(rotd)
+            n.setPos(x, y, 0.02)
+            n.setTransparency(TransparencyAttrib.MAlpha)
+            n.setDepthOffset(1)
+            n.reparentTo(self.level)
+
+        def wall_decal(tex, x, y, z, h, w, ht):
+            if not tex:
+                return
+            cm = CardMaker("blood_w")
+            cm.setFrame(-w / 2, w / 2, -ht / 2, ht / 2)
+            n = self.render.attachNewNode(cm.generate())
+            n.setTexture(tex)
+            n.setH(h)
+            n.setPos(x, y, z)
+            n.setTransparency(TransparencyAttrib.MAlpha)
+            n.setDepthOffset(1)
+            n.reparentTo(self.level)
+
+        # 地面血迹（走廊/房间散布）
+        for (x, y, s, r) in [(0, 10, 2.4, 15), (-3, 22, 2.0, 60), (3, 34, 2.6, -20),
+                             (-8, 8, 1.8, 30), (8, 46, 2.2, 45), (0, 44, 2.0, 0),
+                             (-4, 40, 1.6, 80)]:
+            floor_decal(t_floor, x, y, s)
+        # 墙面血手印/拖痕（贴中央走廊两侧内表面 x=±2）
+        for (x, y, h) in [(-1.9, 14, 90), (1.9, 26, -90), (-1.9, 38, 90), (1.9, 48, -90)]:
+            wall_decal(t_wall, x, y, 1.4, h, 2.0, 2.2)
 
     def _build_knockables(self):
         """可碰倒的小道具：身体走过去接触即被推倒/推开。
