@@ -171,6 +171,42 @@ PROPS = [
 ]
 
 
+# ---- 道具碰撞尺寸（半宽x, 半宽y, 半高z），按 type。旋转 90/270 交换 xy。----
+# 小/软/可穿物件（curtain/ivpole/monitor/chair）footprint 很小或不挡路。
+_PROP_FOOTPRINT = {
+    "bed":      (0.5, 1.0, 0.5),
+    "gurney":   (0.4, 1.0, 0.5),
+    "desk":     (0.85, 0.45, 0.4),
+    "chair":    (0.28, 0.28, 0.4),
+    "shelf":    (0.28, 0.72, 1.0),
+    "locker":   (0.48, 0.32, 1.0),
+    "sink":     (0.32, 0.28, 0.5),
+    "fusebox_panel": (0.1, 0.5, 0.6),
+    "boxes":    (0.35, 0.3, 0.4),
+    "bedtable": (0.22, 0.22, 0.4),
+    # ivpole / monitor / curtain 不加碰撞（细杆/软帘，玩家可贴近交互）
+}
+
+
+def build_prop_colliders():
+    """返回 [(cx, cy, hx, hy, hz), ...]。供游戏为道具生成碰撞盒。"""
+    out = []
+    for p in PROPS:
+        fp = _PROP_FOOTPRINT.get(p["type"])
+        if not fp:
+            continue
+        hx, hy, hz = fp
+        rot = p.get("rot", 0) % 180
+        # 接近 90 度时交换 x/y footprint
+        if 45 <= rot < 135:
+            hx, hy = hy, hx
+        out.append((p["pos"][0], p["pos"][1], hx, hy, hz))
+    return out
+
+
+PROP_COLLIDERS = build_prop_colliders()
+
+
 # ---- 交互/解谜物件的世界坐标（游戏逻辑与可见模型共用）----
 # 解谜链见 echo_ward_game。这里只给位置；房间是提示来源。
 INTERACTIVES = {

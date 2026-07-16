@@ -43,6 +43,37 @@ def make_material(name, color, rough=0.85, metal=0.0, emit=None, emit_str=2.0):
     return mat
 
 
+def make_tex_material(name, img_file, scale=0.33, rough=0.9, tint=(1, 1, 1)):
+    """Textured material using BOX projection on Object coords for world-space
+    tiling (repeats every 1/scale meters). Falls back gracefully if image missing."""
+    mat = bpy.data.materials.new(name)
+    mat.use_nodes = True
+    nt = mat.node_tree
+    bsdf = None
+    for node in nt.nodes:
+        if node.type == "BSDF_PRINCIPLED":
+            bsdf = node
+            break
+    path = os.path.join(_ROOT, "assets", "textures", img_file)
+    if not os.path.exists(path):
+        bsdf.inputs["Base Color"].default_value = (*tint, 1.0)
+        bsdf.inputs["Roughness"].default_value = rough
+        return mat
+    img = bpy.data.images.load(path)
+    texco = nt.nodes.new("ShaderNodeTexCoord")
+    mapping = nt.nodes.new("ShaderNodeMapping")
+    mapping.inputs["Scale"].default_value = (scale, scale, scale)
+    tex = nt.nodes.new("ShaderNodeTexImage")
+    tex.image = img
+    tex.projection = "BOX"
+    tex.projection_blend = 0.3
+    nt.links.new(texco.outputs["Object"], mapping.inputs["Vector"])
+    nt.links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
+    nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    bsdf.inputs["Roughness"].default_value = rough
+    return mat
+
+
 def add_box(name, size, location, material, bevel=0.015):
     bpy.ops.mesh.primitive_cube_add(size=1, location=location)
     obj = bpy.context.active_object
@@ -325,30 +356,31 @@ PROP_FUNCS = {
 def build():
     clear_scene()
     M = {
-        "floor":   make_material("floor", (0.22, 0.23, 0.22), rough=0.7),
-        "floor2":  make_material("floor2", (0.16, 0.17, 0.17), rough=0.75),
-        "wall":    make_material("wall", (0.40, 0.41, 0.38), rough=0.92),
-        "wall_low":make_material("wall_low", (0.28, 0.32, 0.34), rough=0.9),
-        "ceil":    make_material("ceil", (0.14, 0.15, 0.17), rough=0.95),
-        "trim":    make_material("trim", (0.22, 0.18, 0.15), rough=0.8),
-        "metal":   make_material("metal", (0.50, 0.52, 0.55), rough=0.4, metal=0.9),
-        "metal_l": make_material("metal_l", (0.72, 0.74, 0.76), rough=0.25, metal=0.95),
-        "bed":     make_material("bed", (0.70, 0.73, 0.77), rough=0.7),
-        "white":   make_material("white", (0.86, 0.87, 0.88), rough=0.6),
-        "wood":    make_material("wood", (0.40, 0.29, 0.19), rough=0.75),
-        "wood_d":  make_material("wood_d", (0.28, 0.20, 0.13), rough=0.8),
-        "black":   make_material("black", (0.08, 0.08, 0.09), rough=0.5),
-        "rubber":  make_material("rubber", (0.05, 0.05, 0.06), rough=0.9),
-        "locker":  make_material("locker", (0.30, 0.44, 0.42), rough=0.55, metal=0.4),
-        "locker_d":make_material("locker_d", (0.24, 0.36, 0.35), rough=0.55, metal=0.4),
-        "porc":    make_material("porc", (0.86, 0.87, 0.89), rough=0.35),
-        "porc_d":  make_material("porc_d", (0.70, 0.72, 0.74), rough=0.4),
-        "glass":   make_material("glass", (0.6, 0.68, 0.72), rough=0.1, metal=0.3),
-        "box":     make_material("box", (0.55, 0.44, 0.30), rough=0.9),
-        "curtain": make_material("curtain", (0.45, 0.55, 0.58), rough=0.85),
-        "fluid":   make_material("fluid", (0.85, 0.9, 0.8), rough=0.2),
-        "warn":    make_material("warn", (0.9, 0.5, 0.1), rough=0.5, emit=(0.9, 0.4, 0.05), emit_str=1.5),
-        "screen":  make_material("screen", (0.1, 0.5, 0.35), rough=0.3, emit=(0.1, 0.6, 0.4), emit_str=1.0),
+        # 地面/墙面用不同的恐怖贴图（脏地板 vs 污渍墙），拉开材质差异
+        "floor":   make_tex_material("floor", "floor_dirty.png", scale=0.22, rough=0.85, tint=(0.5, 0.5, 0.5)),
+        "wall":    make_tex_material("wall", "grime_wall.png", scale=0.16, rough=0.95, tint=(0.5, 0.52, 0.5)),
+        "wall_low":make_tex_material("wall_low", "blood_wall.png", scale=0.2, rough=0.9, tint=(0.45, 0.45, 0.45)),
+        "ceil":    make_material("ceil", (0.10, 0.11, 0.12), rough=0.95),
+        "trim":    make_material("trim", (0.16, 0.13, 0.11), rough=0.85),
+        # 道具去饱和、压暗，统一成锈旧医院色调
+        "metal":   make_material("metal", (0.34, 0.35, 0.37), rough=0.6, metal=0.7),
+        "metal_l": make_material("metal_l", (0.46, 0.47, 0.48), rough=0.5, metal=0.7),
+        "bed":     make_material("bed", (0.52, 0.53, 0.54), rough=0.85),
+        "white":   make_material("white", (0.62, 0.62, 0.60), rough=0.8),
+        "wood":    make_material("wood", (0.30, 0.23, 0.16), rough=0.85),
+        "wood_d":  make_material("wood_d", (0.20, 0.15, 0.10), rough=0.85),
+        "black":   make_material("black", (0.06, 0.06, 0.07), rough=0.6),
+        "rubber":  make_material("rubber", (0.04, 0.04, 0.05), rough=0.9),
+        "locker":  make_material("locker", (0.28, 0.32, 0.31), rough=0.7, metal=0.3),
+        "locker_d":make_material("locker_d", (0.22, 0.26, 0.25), rough=0.7, metal=0.3),
+        "porc":    make_material("porc", (0.60, 0.61, 0.60), rough=0.55),
+        "porc_d":  make_material("porc_d", (0.44, 0.45, 0.44), rough=0.6),
+        "glass":   make_material("glass", (0.30, 0.34, 0.36), rough=0.2, metal=0.3),
+        "box":     make_material("box", (0.38, 0.31, 0.22), rough=0.95),
+        "curtain": make_material("curtain", (0.34, 0.38, 0.38), rough=0.9),
+        "fluid":   make_material("fluid", (0.55, 0.58, 0.5), rough=0.4),
+        "warn":    make_material("warn", (0.7, 0.4, 0.08), rough=0.6, emit=(0.7, 0.3, 0.04), emit_str=1.2),
+        "screen":  make_material("screen", (0.08, 0.35, 0.25), rough=0.4, emit=(0.08, 0.45, 0.3), emit_str=0.8),
         "lamp":    make_material("lamp", (0.9, 0.95, 1.0), rough=0.5, emit=(0.85, 0.9, 1.0), emit_str=0.6),
     }
     t = 0.2

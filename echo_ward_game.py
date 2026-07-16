@@ -496,7 +496,11 @@ class EchoWardGame(ShowBase):
         self.player.setPos(*L.SPAWN)
 
         col = CollisionNode("player_col")
-        col.addSolid(CollisionSphere(0, 0, 0, 0.5))
+        # 玩家碰撞体沿身体高度分布（origin 在眼高 z≈1.6），覆盖到腰/膝，
+        # 才能撞到 0.5~1m 高的家具，而不是浮在家具上方穿过去。
+        col.addSolid(CollisionSphere(0, 0, -0.3, 0.45))   # 胸
+        col.addSolid(CollisionSphere(0, 0, -0.9, 0.45))   # 腰
+        col.addSolid(CollisionSphere(0, 0, -1.4, 0.45))   # 膝
         col.setFromCollideMask(BitMask32.bit(0))
         col.setIntoCollideMask(BitMask32.allOff())
         self.player_col = self.player.attachNewNode(col)
@@ -512,6 +516,17 @@ class EchoWardGame(ShowBase):
             cn.setIntoCollideMask(BitMask32.bit(0))
             c = self.render.attachNewNode(cn)
             c.setPos(mx, my, L.WALL_H * 0.5)
+
+        # 道具碰撞盒（读共享数据 PROP_COLLIDERS，与可见模型对齐，玩家撞不过去）
+        for cx, cy, hx, hy, hz in L.PROP_COLLIDERS:
+            cn = CollisionNode("prop_col")
+            cn.addSolid(CollisionBox(Point3(0, 0, 0), hx, hy, hz))
+            cn.setIntoCollideMask(BitMask32.bit(0))
+            c = self.render.attachNewNode(cn)
+            c.setPos(cx, cy, hz)
+
+        # 撞击音效冷却计时（在移动逻辑里对比"想移动 vs 实际移动"判定撞墙）
+        self._bump_cooldown = 0.0
 
     # ---------- 灯光 ----------
 
@@ -731,6 +746,8 @@ class EchoWardGame(ShowBase):
 
         # 2D 音效
         self.sfx_footstep = self._load_sfx("footstep.wav", vol=0.5)
+        # 撞击闷响：复用 door.wav 作占位（若有专门 bump 音则优先）
+        self.sfx_bump = self._load_sfx("bump.wav", vol=0.6) or self._load_sfx("door.wav", vol=0.4)
         self.sfx_heartbeat = self._load_sfx("heartbeat.wav", loop=True, vol=0.0)
         self.sfx_door = self._load_sfx("door.wav", vol=0.7)
         self.sfx_pickup = self._load_sfx("pickup.wav", vol=0.6)
@@ -1311,9 +1328,22 @@ class EchoWardGame(ShowBase):
                 rad = math.radians(self.heading)
                 wx = move.x * math.cos(rad) - move.y * math.sin(rad)
                 wy = move.x * math.sin(rad) + move.y * math.cos(rad)
-                self.player.setX(self.player.getX() + wx * speed * dt)
-                self.player.setY(self.player.getY() + wy * speed * dt)
+                bx, by = self.player.getX(), self.player.getY()
+                self.player.setX(bx + wx * speed * dt)
+                self.player.setY(by + wy * speed * dt)
                 self.player.setZ(1.1 if self.crouching else 1.6)
+                # 运行碰撞：pusher 把玩家推出墙/道具
+                self.cTrav.traverse(self.render)
+                # 撞击检测：想走的距离 vs 实际移动的距离差很大 → 撞到东西
+                ax, ay = self.player.getX(), self.player.getY()
+                intended = math.hypot(wx, wy) * speed * dt
+                actual = math.hypot(ax - bx, ay - by)
+                if self._bump_cooldown > 0:
+                    self._bump_cooldown -= dt
+                if intended > 0.01 and actual < intended * 0.5 and self._bump_cooldown <= 0:
+                    if self.sfx_bump:
+                        self.sfx_bump.play()
+                    self._bump_cooldown = 0.4
                 # 噪声：奔跑最大，行走中等，蹲行很低
                 self.noise_this_frame = 1.0 if running else (0.4 if not self.crouching else 0.1)
                 # 脚步声
