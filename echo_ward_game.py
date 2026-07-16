@@ -246,6 +246,7 @@ class EchoWardGame(ShowBase):
         self._setup_collision()
         self._setup_lighting()
         self._setup_flashlight()
+        self._setup_player_body()
         self._setup_camera()
         self._setup_audio()
         self._setup_input()
@@ -375,13 +376,15 @@ class EchoWardGame(ShowBase):
             n.setDepthOffset(1)
             n.reparentTo(self.level)
 
-        # 地面血迹（走廊/房间散布）
-        for (x, y, s, r) in [(0, 10, 2.4, 15), (-3, 22, 2.0, 60), (3, 34, 2.6, -20),
-                             (-8, 8, 1.8, 30), (8, 46, 2.2, 45), (0, 44, 2.0, 0),
-                             (-4, 40, 1.6, 80)]:
+        # 地面血迹（沿全长走廊/各房间散布，覆盖扩大的地图）
+        for (x, y, s, r) in [(0, 6, 2.4, 15), (-3, 22, 2.0, 60), (3, 34, 2.6, -20),
+                             (-9, 8, 1.8, 30), (9, 50, 2.2, 45), (0, 44, 2.0, 0),
+                             (-9, 42, 2.4, 80), (0, 62, 2.2, 25), (9, 68, 2.6, -30),
+                             (-6, 74, 2.0, 50), (0, 30, 1.8, 10)]:
             floor_decal(t_floor, x, y, s)
-        # 墙面血手印/拖痕（贴中央走廊两侧内表面 x=±2）
-        for (x, y, h) in [(-1.9, 14, 90), (1.9, 26, -90), (-1.9, 38, 90), (1.9, 48, -90)]:
+        # 墙面血手印/拖痕（贴中央走廊两侧内表面 x=±2，沿全长）
+        for (x, y, h) in [(-1.9, 14, 90), (1.9, 26, -90), (-1.9, 40, 90),
+                          (1.9, 54, -90), (-1.9, 62, 90), (1.9, 72, -90)]:
             wall_decal(t_wall, x, y, 1.4, h, 2.0, 2.2)
 
     def _build_knockables(self):
@@ -390,16 +393,22 @@ class EchoWardGame(ShowBase):
         每个 = {node, home(初始pos), toppled(是否已倒)}。"""
         self.knockables = []
         # (类型, x, y, 颜色) —— 放在房间/走廊里可被撞到的小物件
+        # 去饱和的暗色调（配合恐怖废弃感）；铺满全长走廊与各房间
         specs = [
-            ("stool", -6, 4, (0.6, 0.5, 0.35)),
-            ("stool", 6, 4, (0.6, 0.5, 0.35)),
-            ("bin", -3, 12, (0.3, 0.4, 0.45)),
-            ("bin", 3, 20, (0.3, 0.4, 0.45)),
-            ("ivstand", -9, 16, (0.7, 0.72, 0.74)),
-            ("ivstand", 9, 10, (0.7, 0.72, 0.74)),
-            ("bin", -3, 44, (0.3, 0.4, 0.45)),
-            ("stool", 4, 50, (0.6, 0.5, 0.35)),
-            ("cart", 0, 28, (0.55, 0.57, 0.6)),
+            ("stool", -6, 4, (0.32, 0.3, 0.24)),
+            ("stool", 6, 4, (0.32, 0.3, 0.24)),
+            ("bin", -3, 12, (0.22, 0.26, 0.28)),
+            ("bin", 3, 24, (0.22, 0.26, 0.28)),
+            ("ivstand", -9, 16, (0.42, 0.43, 0.44)),
+            ("ivstand", 9, 14, (0.42, 0.43, 0.44)),
+            ("cart", 0, 30, (0.34, 0.35, 0.37)),
+            ("bin", -6, 46, (0.22, 0.26, 0.28)),
+            ("stool", 6, 52, (0.32, 0.3, 0.24)),
+            ("cart", 0, 48, (0.34, 0.35, 0.37)),
+            ("ivstand", -6, 62, (0.42, 0.43, 0.44)),
+            ("stool", 6, 68, (0.32, 0.3, 0.24)),
+            ("bin", -3, 72, (0.22, 0.26, 0.28)),
+            ("cart", 0, 64, (0.34, 0.35, 0.37)),
         ]
         for kind, x, y, col in specs:
             node = NodePath("knock_%s_%d_%d" % (kind, x, y))
@@ -588,6 +597,29 @@ class EchoWardGame(ShowBase):
         self.flashlight_np = self.camera.attachNewNode(spot)
         self.flashlight_np.setPos(0.2, 0, -0.1)
         self.render.setLight(self.flashlight_np)
+
+    def _setup_player_body(self):
+        """第一人称可见身体：低头能看到躯干/腿/手。挂在 player 节点上（随朝向转、
+        不随俯仰），origin 在眼高 z=1.6，故身体各部件用负 z 偏移。"""
+        self.body = NodePath("player_body")
+        self.body.reparentTo(self.player)
+
+        def part(name, scale, pos, color):
+            m = self.loader.loadModel("models/box")
+            m.setScale(*scale)
+            m.setPos(pos[0] - scale[0] / 2, pos[1] - scale[1] / 2, pos[2] - scale[2] / 2)
+            m.setColor(*color, 1)
+            m.reparentTo(self.body)
+            return m
+
+        # 躯干（深色工装）——顶部在 z≈-0.35（下巴下方），避免遮挡视野
+        part("torso", (0.42, 0.26, 0.7), (0, 0.02, -0.7), (0.16, 0.17, 0.2))
+        # 两条腿
+        part("leg_l", (0.17, 0.2, 0.95), (-0.11, 0.02, -1.55), (0.12, 0.12, 0.14))
+        part("leg_r", (0.17, 0.2, 0.95), (0.11, 0.02, -1.55), (0.12, 0.12, 0.14))
+        # 两只前伸的手臂（拿手电感）
+        part("arm_l", (0.12, 0.5, 0.12), (-0.2, 0.32, -0.5), (0.18, 0.19, 0.22))
+        part("arm_r", (0.12, 0.5, 0.12), (0.2, 0.32, -0.5), (0.18, 0.19, 0.22))
 
     def _setup_camera(self):
         self.camera.reparentTo(self.player)

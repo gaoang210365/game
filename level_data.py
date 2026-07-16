@@ -17,16 +17,16 @@ WALL_H = 3.2          # 墙高 / 层高
 WALL_T = 0.2          # 墙厚
 DOOR_W = 1.6          # 门洞宽
 
-# 地面/天花板包围盒（整层外接矩形）
-FLOOR_X0, FLOOR_X1 = -14.0, 14.0
-FLOOR_Y0, FLOOR_Y1 = -4.0, 56.0
+# 地面/天花板包围盒（整层外接矩形）—— 扩大：更长更宽
+FLOOR_X0, FLOOR_X1 = -16.0, 16.0
+FLOOR_Y0, FLOOR_Y1 = -4.0, 80.0
 
 # 玩家出生（南端主走廊）
 SPAWN = (0.0, -1.0, 1.6)
 SPAWN_H = 0.0
 
 # 出口安全门（北端尽头）
-EXIT_POS = (0.0, 54.0, 0.0)
+EXIT_POS = (0.0, 78.0, 0.0)
 
 
 def _wall_with_gaps(x0, y0, x1, y1, gaps):
@@ -61,44 +61,45 @@ def _wall_with_gaps(x0, y0, x1, y1, gaps):
 
 
 # ---- 房间定义（名称 -> 矩形范围）。中央走廊 x∈[-2,2] 贯穿南北。----
+# 西翼隔断 y: 10/22/36/52；东翼隔断 y: 12/28/44/60。房间大小刻意不一。
 ROOMS = {
-    # 西翼（x 负）
-    "ward_a":  {"x0": -14, "y0": -4, "x1": -2, "y1": 10,  "cn": "401 病房"},
-    "ward_b":  {"x0": -14, "y0": 10, "x1": -2, "y1": 24,  "cn": "403 病房"},
-    "nurse":   {"x0": -14, "y0": 24, "x1": -2, "y1": 38,  "cn": "护士站"},
-    "power":   {"x0": -14, "y0": 38, "x1": -2, "y1": 56,  "cn": "配电房"},
-    # 东翼（x 正）
-    "ward_c":  {"x0": 2,   "y0": -4, "x1": 14, "y1": 12,  "cn": "402 病房"},
-    "storage": {"x0": 2,   "y0": 12, "x1": 14, "y1": 26,  "cn": "储藏室"},
-    "office":  {"x0": 2,   "y0": 26, "x1": 14, "y1": 40,  "cn": "医生办公室"},
-    "exam":    {"x0": 2,   "y0": 40, "x1": 14, "y1": 56,  "cn": "检查室"},
+    # 西翼（x 负，x0=-16..x1=-2）
+    "ward_a":   {"x0": -16, "y0": -4, "x1": -2, "y1": 10,  "cn": "401 病房"},
+    "ward_b":   {"x0": -16, "y0": 10, "x1": -2, "y1": 22,  "cn": "403 病房"},
+    "nurse":    {"x0": -16, "y0": 22, "x1": -2, "y1": 36,  "cn": "护士站"},
+    "morgue":   {"x0": -16, "y0": 36, "x1": -2, "y1": 52,  "cn": "停尸间"},
+    "power":    {"x0": -16, "y0": 52, "x1": -2, "y1": 80,  "cn": "配电房"},
+    # 东翼（x 正，x0=2..x1=16）
+    "ward_c":   {"x0": 2,   "y0": -4, "x1": 16, "y1": 12,  "cn": "402 病房"},
+    "storage":  {"x0": 2,   "y0": 12, "x1": 16, "y1": 28,  "cn": "储藏室"},
+    "office":   {"x0": 2,   "y0": 28, "x1": 16, "y1": 44,  "cn": "医生办公室"},
+    "exam":     {"x0": 2,   "y0": 44, "x1": 16, "y1": 60,  "cn": "检查室"},
+    "surgery":  {"x0": 2,   "y0": 60, "x1": 16, "y1": 80,  "cn": "手术室"},
 }
 
 # 每个房间在走廊墙上的门洞中心 y（连通中央走廊）
-_WEST_DOORS = [3, 17, 31, 47]        # ward_a / ward_b / nurse / power
-_EAST_DOORS = [4, 19, 33, 48]        # ward_c / storage / office / exam
+_WEST_DOORS = [3, 16, 29, 44, 66]     # ward_a/ward_b/nurse/morgue/power
+_EAST_DOORS = [4, 20, 36, 52, 70]     # ward_c/storage/office/exam/surgery
 
 
 def build_walls():
     """展开成全部墙段 [(cx,cy,lx,ly), ...]。游戏与 Blender 共用。"""
     W = []
-    # 外周墙
     W += _wall_with_gaps(FLOOR_X0, FLOOR_Y0, FLOOR_X1, FLOOR_Y0, [])       # 南
     W += _wall_with_gaps(FLOOR_X0, FLOOR_Y1, FLOOR_X1, FLOOR_Y1,
-                         [(EXIT_POS[0], DOOR_W)])                          # 北（出口门洞）
+                         [(EXIT_POS[0], DOOR_W)])                          # 北（出口）
     W += _wall_with_gaps(FLOOR_X0, FLOOR_Y0, FLOOR_X0, FLOOR_Y1, [])       # 西
     W += _wall_with_gaps(FLOOR_X1, FLOOR_Y0, FLOOR_X1, FLOOR_Y1, [])       # 东
-    # 中央走廊两侧长墙（带各房间门洞）
     W += _wall_with_gaps(-2, FLOOR_Y0, -2, FLOOR_Y1,
                          [(y, DOOR_W) for y in _WEST_DOORS])
     W += _wall_with_gaps(2, FLOOR_Y0, 2, FLOOR_Y1,
                          [(y, DOOR_W) for y in _EAST_DOORS])
-    # 西翼房间之间的横向隔断（x: -14..-2）
-    for y in (10, 24, 38):
-        W += _wall_with_gaps(-14, y, -2, y, [])
-    # 东翼房间之间的横向隔断（x: 2..14）
-    for y in (12, 26, 40):
-        W += _wall_with_gaps(2, y, 14, y, [])
+    # 西翼横向隔断
+    for y in (10, 22, 36, 52):
+        W += _wall_with_gaps(-16, y, -2, y, [])
+    # 东翼横向隔断
+    for y in (12, 28, 44, 60):
+        W += _wall_with_gaps(2, y, 16, y, [])
     return W
 
 
@@ -109,65 +110,84 @@ WALLS = build_walls()
 # type: bed / gurney / desk / chair / shelf / locker / sink / fusebox_panel
 #       ivpole / monitor / wheelchair / boxes / curtain / bedtable
 PROPS = [
-    # 401 病房（西南）：两张床+床头桌+隔帘+输液架+监护仪
-    {"type": "bed",      "pos": (-11, 1.5), "rot": 90},
-    {"type": "bedtable", "pos": (-11, 3.2), "rot": 0},
-    {"type": "ivpole",   "pos": (-9.4, 1),  "rot": 0},
-    {"type": "curtain",  "pos": (-8.5, 2),  "rot": 0},
-    {"type": "bed",      "pos": (-11, 7),   "rot": 90},
-    {"type": "bedtable", "pos": (-11, 8.7), "rot": 0},
-    {"type": "monitor",  "pos": (-9.4, 7),  "rot": 0},
-    {"type": "wheelchair","pos": (-4, 6.5), "rot": 200},
-    # 403 病房（西中）
-    {"type": "bed",      "pos": (-11, 13),  "rot": 90},
-    {"type": "bedtable", "pos": (-11, 14.7),"rot": 0},
-    {"type": "ivpole",   "pos": (-9.4, 13), "rot": 0},
-    {"type": "curtain",  "pos": (-8.5, 14), "rot": 0},
-    {"type": "bed",      "pos": (-11, 20),  "rot": 90},
-    {"type": "gurney",   "pos": (-5, 18),   "rot": 20},
-    {"type": "monitor",  "pos": (-9.4, 20), "rot": 0},
-    # 护士站（西中北）
-    {"type": "desk",     "pos": (-8, 30),   "rot": 0},
-    {"type": "chair",    "pos": (-8, 28.8), "rot": 180},
-    {"type": "monitor",  "pos": (-5.5, 31), "rot": 90},
-    {"type": "shelf",    "pos": (-13.3, 26.5),"rot": 90},
-    {"type": "shelf",    "pos": (-13.3, 30), "rot": 90},
-    {"type": "boxes",    "pos": (-5, 36),   "rot": 0},
-    # 配电房（西北）
-    {"type": "fusebox_panel", "pos": (-13.4, 47), "rot": 0},
-    {"type": "locker",   "pos": (-4, 40),   "rot": 180},
-    {"type": "boxes",    "pos": (-11, 52),  "rot": 30},
-    {"type": "shelf",    "pos": (-13.3, 42),"rot": 90},
-    # 402 病房（东南）
-    {"type": "bed",      "pos": (11, 1.5),  "rot": 90},
-    {"type": "bedtable", "pos": (11, 3.2),  "rot": 0},
-    {"type": "ivpole",   "pos": (9.4, 1),   "rot": 0},
-    {"type": "curtain",  "pos": (8.5, 2),   "rot": 0},
-    {"type": "bed",      "pos": (11, 8),    "rot": 90},
-    {"type": "bedtable", "pos": (11, 9.7),  "rot": 0},
-    {"type": "gurney",   "pos": (5, 6),     "rot": 90},
-    {"type": "monitor",  "pos": (9.4, 8),   "rot": 0},
-    # 储藏室（东中）
-    {"type": "shelf",    "pos": (13.3, 14), "rot": 90},
-    {"type": "shelf",    "pos": (13.3, 18), "rot": 90},
-    {"type": "shelf",    "pos": (13.3, 22), "rot": 90},
-    {"type": "locker",   "pos": (4, 24),    "rot": 180},
-    {"type": "boxes",    "pos": (10, 20),   "rot": 15},
-    {"type": "boxes",    "pos": (7, 14),    "rot": -20},
-    {"type": "wheelchair","pos": (6, 24),   "rot": 90},
-    # 医生办公室（东中北）
-    {"type": "desk",     "pos": (8, 32),    "rot": 0},
-    {"type": "chair",    "pos": (8, 30.7),  "rot": 180},
-    {"type": "shelf",    "pos": (13.3, 28), "rot": 90},
-    {"type": "shelf",    "pos": (13.3, 32), "rot": 90},
-    {"type": "boxes",    "pos": (4, 38),    "rot": 0},
-    # 检查室（东北）
-    {"type": "gurney",   "pos": (8, 46),    "rot": 0},
-    {"type": "monitor",  "pos": (10.5, 44), "rot": 0},
-    {"type": "ivpole",   "pos": (6, 44),    "rot": 0},
-    {"type": "sink",     "pos": (13.3, 42), "rot": 90},
-    {"type": "curtain",  "pos": (5, 48),    "rot": 90},
-    {"type": "wheelchair","pos": (10, 52),  "rot": 210},
+    # 401 病房 ward_a (x-16..-2, y-4..10)，门 y=3
+    {"type": "bed",      "pos": (-14, 0),   "rot": 90},
+    {"type": "bedtable", "pos": (-14, 2),   "rot": 0},
+    {"type": "ivpole",   "pos": (-12, -1),  "rot": 0},
+    {"type": "curtain",  "pos": (-11, 0),   "rot": 0},
+    {"type": "bed",      "pos": (-14, 7),   "rot": 90},
+    {"type": "bedtable", "pos": (-14, 9),   "rot": 0},
+    {"type": "monitor",  "pos": (-12, 7),   "rot": 0},
+    {"type": "wheelchair","pos": (-5, 7),   "rot": 200},
+    # 403 病房 ward_b (x-16..-2, y10..22)，门 y=16
+    {"type": "bed",      "pos": (-14, 13),  "rot": 90},
+    {"type": "bedtable", "pos": (-14, 15),  "rot": 0},
+    {"type": "ivpole",   "pos": (-12, 12),  "rot": 0},
+    {"type": "curtain",  "pos": (-11, 13),  "rot": 0},
+    {"type": "bed",      "pos": (-14, 20),  "rot": 90},
+    {"type": "gurney",   "pos": (-6, 19),   "rot": 20},
+    {"type": "monitor",  "pos": (-12, 20),  "rot": 0},
+    # 护士站 nurse (x-16..-2, y22..36)，门 y=29
+    {"type": "desk",     "pos": (-9, 26),   "rot": 0},
+    {"type": "chair",    "pos": (-9, 24.8), "rot": 180},
+    {"type": "monitor",  "pos": (-6, 27),   "rot": 90},
+    {"type": "shelf",    "pos": (-15.3, 25),"rot": 90},
+    {"type": "shelf",    "pos": (-15.3, 29),"rot": 90},
+    {"type": "boxes",    "pos": (-6, 34),   "rot": 0},
+    # 停尸间 morgue (x-16..-2, y36..52)，门 y=44 —— 尸柜 + 推床
+    {"type": "locker",   "pos": (-15, 39),  "rot": 90},
+    {"type": "locker",   "pos": (-15, 42),  "rot": 90},
+    {"type": "locker",   "pos": (-15, 45),  "rot": 90},
+    {"type": "gurney",   "pos": (-9, 40),   "rot": 0},
+    {"type": "gurney",   "pos": (-6, 48),   "rot": 15},
+    {"type": "sink",     "pos": (-15.3, 49),"rot": 90},
+    {"type": "curtain",  "pos": (-4, 46),   "rot": 0},
+    # 配电房 power (x-16..-2, y52..80)，门 y=66 —— 配电箱在此
+    {"type": "fusebox_panel", "pos": (-15.4, 66), "rot": 0},
+    {"type": "locker",   "pos": (-5, 58),   "rot": 180},
+    {"type": "shelf",    "pos": (-15.3, 56),"rot": 90},
+    {"type": "shelf",    "pos": (-15.3, 60),"rot": 90},
+    {"type": "boxes",    "pos": (-12, 74),  "rot": 30},
+    {"type": "boxes",    "pos": (-6, 72),   "rot": -15},
+    # 402 病房 ward_c (x2..16, y-4..12)，门 y=4
+    {"type": "bed",      "pos": (14, 0),    "rot": 90},
+    {"type": "bedtable", "pos": (14, 2),    "rot": 0},
+    {"type": "ivpole",   "pos": (12, -1),   "rot": 0},
+    {"type": "curtain",  "pos": (11, 0),    "rot": 0},
+    {"type": "bed",      "pos": (14, 8),    "rot": 90},
+    {"type": "bedtable", "pos": (14, 10),   "rot": 0},
+    {"type": "gurney",   "pos": (6, 8),     "rot": 90},
+    {"type": "monitor",  "pos": (12, 8),    "rot": 0},
+    # 储藏室 storage (x2..16, y12..28)，门 y=20 —— 储物柜（藏钥匙卡）
+    {"type": "shelf",    "pos": (15.3, 14), "rot": 90},
+    {"type": "shelf",    "pos": (15.3, 18), "rot": 90},
+    {"type": "shelf",    "pos": (15.3, 24), "rot": 90},
+    {"type": "locker",   "pos": (5, 24),    "rot": 180},
+    {"type": "boxes",    "pos": (11, 22),   "rot": 15},
+    {"type": "boxes",    "pos": (8, 15),    "rot": -20},
+    {"type": "wheelchair","pos": (7, 26),   "rot": 90},
+    # 医生办公室 office (x2..16, y28..44)，门 y=36 —— 桌上有线索
+    {"type": "desk",     "pos": (9, 34),    "rot": 0},
+    {"type": "chair",    "pos": (9, 32.7),  "rot": 180},
+    {"type": "shelf",    "pos": (15.3, 30), "rot": 90},
+    {"type": "shelf",    "pos": (15.3, 40), "rot": 90},
+    {"type": "boxes",    "pos": (5, 41),    "rot": 0},
+    # 检查室 exam (x2..16, y44..60)，门 y=52
+    {"type": "gurney",   "pos": (9, 50),    "rot": 0},
+    {"type": "monitor",  "pos": (12, 48),   "rot": 0},
+    {"type": "ivpole",   "pos": (6, 48),    "rot": 0},
+    {"type": "sink",     "pos": (15.3, 47), "rot": 90},
+    {"type": "curtain",  "pos": (5, 54),    "rot": 90},
+    {"type": "wheelchair","pos": (12, 56),  "rot": 210},
+    # 手术室 surgery (x2..16, y60..80)，门 y=70 —— 手术台居中 + 监护
+    {"type": "gurney",   "pos": (9, 68),    "rot": 0},
+    {"type": "monitor",  "pos": (12, 66),   "rot": 0},
+    {"type": "monitor",  "pos": (6, 66),    "rot": 0},
+    {"type": "ivpole",   "pos": (11, 70),   "rot": 0},
+    {"type": "ivpole",   "pos": (7, 70),    "rot": 0},
+    {"type": "sink",     "pos": (15.3, 74), "rot": 90},
+    {"type": "shelf",    "pos": (15.3, 63), "rot": 90},
+    {"type": "curtain",  "pos": (5, 74),    "rot": 90},
 ]
 
 
@@ -210,11 +230,11 @@ PROP_COLLIDERS = build_prop_colliders()
 # ---- 交互/解谜物件的世界坐标（游戏逻辑与可见模型共用）----
 # 解谜链见 echo_ward_game。这里只给位置；房间是提示来源。
 INTERACTIVES = {
-    "note_ward_a":  (-6.0, 5.0, 1.2),    # 线索：密码第 1、2 位
-    "note_office":  (8.0, 33.0, 1.2),    # 线索：密码第 3、4 位
-    "keypad_storage": (4.2, 24.0, 1.3),  # 输入 4 位密码 -> 开储物柜拿钥匙卡
-    "locker_key":   (4.0, 24.0, 1.0),    # 储物柜（开锁后给钥匙卡）
-    "fusebox":      (-13.6, 47.0, 1.4),  # 钥匙卡开配电房总闸 -> 恢复电力/开安全门
+    "note_ward_a":  (-13.0, 4.0, 1.2),   # 401 病房床边：密码前两位 47
+    "note_office":  (9.0, 35.0, 1.2),    # 办公室桌上：密码后两位 26
+    "keypad_storage": (5.2, 24.0, 1.3),  # 储藏室储物柜旁键盘：输 4 位密码
+    "locker_key":   (5.0, 24.0, 1.0),    # 储物柜（开锁后给钥匙卡）
+    "fusebox":      (-15.2, 66.0, 1.4),  # 配电房总闸（北端西侧）：钥匙卡恢复供电
     "exit_door":    EXIT_POS,            # 北端安全门（通电后可开）
 }
 
